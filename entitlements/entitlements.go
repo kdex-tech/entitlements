@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Supports exact match and wildcard patterns.
+// Entitlements support exact match and wildcard patterns.
 // Long Form:   <resource>:<resourceName>:<verb>
 // Medium Form: <resource>::<verb>                (means <resource>:*:<verb>)
 // Short Form:  <resource>:<verb>                 (means <resource>:*:<verb>)
@@ -50,30 +50,36 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 	requirements Requirements,
 ) bool {
 	// Make sure never to write back
-	clonedRequirements := deepCloneRequirements(requirements)
+	requirements = deepCloneRequirements(requirements)
 
-	// The identity entitlement allows for pattern matching
+	// In order for pattern matching to work we need to create and add an identity requirement.
 	identity := fmt.Sprintf("%s:%s:read", resource, resourceName)
 
-	// The identity entitlement is added to all requirements
+	// The identity requirement is added to all requirements
 	added := false
-	for _, req := range clonedRequirements {
-		for i, v := range req {
-			if !slices.Contains(v, identity) {
+	for _, req := range requirements {
+		for k, v := range req {
+			if k == "_" && !slices.Contains(v, identity) {
 				v = append(v, identity)
-				req[i] = v
+				req[k] = v
 				added = true
 			}
 		}
 	}
-	// When there are no requirements, a fallback scheme with the identity entitlement is added
+	// When there are no explicit requirements, the identity requirement is added to all groups
 	if !added {
-		clonedRequirements = append(clonedRequirements, map[string][]string{
-			"_": {identity},
-		})
+		if len(requirements) == 0 {
+			requirements = append(requirements, map[string][]string{
+				"_": {identity},
+			})
+		} else {
+			for _, req := range requirements {
+				req["_"] = append(req["_"], identity)
+			}
+		}
 	}
 
-	return ec.VerifyEntitlements(entitlements, clonedRequirements)
+	return ec.VerifyEntitlements(entitlements, requirements)
 }
 
 // VerifyEntitlements checks if the user's entitlements satisfy the security requirements.
@@ -89,27 +95,29 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 		return true
 	}
 
-	clonedEntitlements := deepCloneEntitlements(entitlements)
+	if len(ec.anonymousEntitlements) > 0 {
+		// The entitlements granted to anonymous are added to the "_" scheme
+		entitlements = deepCloneEntitlements(entitlements)
 
-	// The entitlements granted to anonymous are added to the entitlements
-	added := false
-	for _, anonEntitlement := range ec.anonymousEntitlements {
-		for k, v := range clonedEntitlements {
-			if !slices.Contains(v, anonEntitlement) {
-				v = append(v, anonEntitlement)
-				clonedEntitlements[k] = v
-				added = true
+		added := false
+		for _, anonEntitlement := range ec.anonymousEntitlements {
+			for k, v := range entitlements {
+				if k == "_" && !slices.Contains(v, anonEntitlement) {
+					v = append(v, anonEntitlement)
+					entitlements[k] = v
+					added = true
+				}
 			}
 		}
-	}
-	// When there are no entitlements, the anonymous entitlements are added
-	if !added {
-		clonedEntitlements["_"] = append(clonedEntitlements["_"], ec.anonymousEntitlements...)
+		// When there are no entitlements, the anonymous entitlements are added
+		if !added {
+			entitlements["_"] = append(entitlements["_"], ec.anonymousEntitlements...)
+		}
 	}
 
 	// Here requirements are OR'd - user needs to satisfy at least one
 	for _, requirement := range requirements {
-		if ec.satisfiesAndRequirements(clonedEntitlements, requirement) {
+		if ec.satisfiesAndRequirements(entitlements, requirement) {
 			return true
 		}
 	}
@@ -119,15 +127,17 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 
 func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string][]string, requirement map[string][]string) bool {
 	// Here requirements are AND'ed - user must have match all
-	for re, reqs := range requirement {
-		for se, v := range entitlements {
-			if se == re && ec.satisfiesRequirement(v, reqs) {
-				return true
-			}
+	for re, requirementList := range requirement {
+		entitlementList, ok := entitlements[re]
+		if !ok {
+			return false
+		}
+		if !ec.satisfiesRequirement(entitlementList, requirementList) {
+			return false
 		}
 	}
 
-	return false
+	return true
 }
 
 // satisfiesRequirement checks if user entitlements satisfy a single security requirement.

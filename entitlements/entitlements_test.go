@@ -27,7 +27,7 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			anonymousEntitlements: []string{},
 			entitlements:          map[string][]string{},
 			requirements: entitlements.Requirements{
-				{"_": {"pages"}},
+				{"bearer": {"pages"}},
 			},
 			want: false,
 		},
@@ -35,10 +35,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "opaque - entitlements match requirement",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages"},
+				"bearer": {"pages"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages"}},
+				{"bearer": {"pages"}},
 			},
 			want: true,
 		},
@@ -46,10 +46,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "opaque - entitlements does not match requirement",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"books"},
+				"bearer": {"books"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages"}},
+				{"bearer": {"pages"}},
 			},
 			want: false,
 		},
@@ -57,10 +57,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "opaque - does not match wildcard specific verb",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"books"},
+				"bearer": {"books"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"books:read"}},
+				{"bearer": {"books:read"}},
 			},
 			want: false,
 		},
@@ -68,10 +68,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "opaque - does not match wildcard all verb",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"books"},
+				"bearer": {"books"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"books:all"}},
+				{"bearer": {"books:all"}},
 			},
 			want: false,
 		},
@@ -79,10 +79,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "opaque - does not match explicit wildcard all verb",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"books"},
+				"bearer": {"books"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"books:*:all"}},
+				{"bearer": {"books:*:all"}},
 			},
 			want: false,
 		},
@@ -90,10 +90,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "opaque - wildcard all verb entitlement does not match opaque requirement",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"books:all"},
+				"bearer": {"books:all"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"books"}},
+				{"bearer": {"books"}},
 			},
 			want: false,
 		},
@@ -101,10 +101,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "short - entitlements match requirement",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:read"},
+				"bearer": {"pages:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:read"}},
+				{"bearer": {"pages:read"}},
 			},
 			want: true,
 		},
@@ -112,10 +112,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "short - entitlements do not match requirement with multiple verbs",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:read"},
+				"bearer": {"pages:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:read", "pages:write"}},
+				{"bearer": {"pages:read", "pages:write"}},
 			},
 			want: false,
 		},
@@ -123,10 +123,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "short - entitlements do not match requirement with multiple verbs",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:read", "pages:write"},
+				"bearer": {"pages:read", "pages:write"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:read", "pages:write"}},
+				{"bearer": {"pages:read", "pages:write"}},
 			},
 			want: true,
 		},
@@ -134,10 +134,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "short - entitlement does not match requirement wrong verb",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:read"},
+				"bearer": {"pages:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:write"}},
+				{"bearer": {"pages:write"}},
 			},
 			want: false,
 		},
@@ -145,10 +145,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "short - wildcard entitlement does not match opaque requirement",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:all"},
+				"bearer": {"pages:all"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages"}},
+				{"bearer": {"pages"}},
 			},
 			want: false,
 		},
@@ -156,10 +156,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "short - wildcard entitlement matches wildcard requirement",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:all"},
+				"bearer": {"pages:all"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:all"}},
+				{"bearer": {"pages:all"}},
 			},
 			want: true,
 		},
@@ -167,10 +167,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "short - wildcard entitlement matches short requirement",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:all"},
+				"bearer": {"pages:all"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:read"}},
+				{"bearer": {"pages:read"}},
 			},
 			want: true,
 		},
@@ -178,10 +178,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "long - long entitlement matches short requirement",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:/foo:read"},
+				"bearer": {"pages:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:read"}},
+				{"bearer": {"pages:read"}},
 			},
 			want: true,
 		},
@@ -189,10 +189,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "long - long entitlement matches long requirement",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:/foo:read"},
+				"bearer": {"pages:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:/foo:read"}},
+				{"bearer": {"pages:/foo:read"}},
 			},
 			want: true,
 		},
@@ -200,10 +200,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "long - long entitlement does not match short requirement wrong verb",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:/foo:read"},
+				"bearer": {"pages:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:write"}},
+				{"bearer": {"pages:write"}},
 			},
 			want: false,
 		},
@@ -211,10 +211,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "long - long entitlement matches short requirement by verb",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:/foo:read"},
+				"bearer": {"pages:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:read"}},
+				{"bearer": {"pages:read"}},
 			},
 			want: true,
 		},
@@ -222,10 +222,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "long - long entitlement does not match long requirement wrong resourceName",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:/foo:read"},
+				"bearer": {"pages:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:/bar:read"}},
+				{"bearer": {"pages:/bar:read"}},
 			},
 			want: false,
 		},
@@ -233,10 +233,10 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "long - long entitlement does not match long requirement wrong resource",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"pages:/foo:read"},
+				"bearer": {"pages:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"books:/foo:read"}},
+				{"bearer": {"books:/foo:read"}},
 			},
 			want: false,
 		},
@@ -244,11 +244,11 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "OR - entitlement does not match by resource",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"users:/foo:read"},
+				"bearer": {"users:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"books:/foo:read"}},
-				{"_": {"pages:/bar:read"}},
+				{"bearer": {"books:/foo:read"}},
+				{"bearer": {"pages:/bar:read"}},
 			},
 			want: false,
 		},
@@ -256,11 +256,11 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "OR - entitlement does not match by verb",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"users:/foo:read"},
+				"bearer": {"users:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"users:/foo:write"}},
-				{"_": {"users:/foo:delete"}},
+				{"bearer": {"users:/foo:write"}},
+				{"bearer": {"users:/foo:delete"}},
 			},
 			want: false,
 		},
@@ -268,11 +268,11 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "OR - entitlement does not match by resourceName",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"users:/foo:read"},
+				"bearer": {"users:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"users:/bar:read"}},
-				{"_": {"users:/baz:read"}},
+				{"bearer": {"users:/bar:read"}},
+				{"bearer": {"users:/baz:read"}},
 			},
 			want: false,
 		},
@@ -280,11 +280,11 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "OR - entitlement matches one of the requirements",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"users:/foo:read"},
+				"bearer": {"users:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"users:/bar:read"}},
-				{"_": {"users:/foo:read"}},
+				{"bearer": {"users:/bar:read"}},
+				{"bearer": {"users:/foo:read"}},
 			},
 			want: true,
 		},
@@ -292,12 +292,12 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "AND - entitlement does not match all of the requirements",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"users:/foo:read"},
+				"bearer": {"users:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
 				{
-					"_":      {"users:/bar:read"},
-					"bearer": {"users:/foo:read"},
+					"bearer": {"users:/bar:read"},
+					"other":  {"users:/foo:read"},
 				},
 			},
 			want: false,
@@ -306,13 +306,13 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "AND - entitlement matches all of the requirements",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_":      {"users:/bar:read"},
-				"bearer": {"users:/foo:read"},
+				"bearer": {"users:/bar:read"},
+				"other":  {"users:/foo:read"},
 			},
 			requirements: entitlements.Requirements{
 				{
-					"_":      {"users:/bar:read"},
-					"bearer": {"users:/foo:read"},
+					"bearer": {"users:/bar:read"},
+					"other":  {"users:/foo:read"},
 				},
 			},
 			want: true,
@@ -321,11 +321,85 @@ func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
 			name:                  "AND - entitlement does not match scheme of requirement",
 			anonymousEntitlements: []string{},
 			entitlements: map[string][]string{
-				"_": {"users:/bar:read"},
+				"bearer": {"users:/bar:read"},
 			},
 			requirements: entitlements.Requirements{
 				{
-					"bearer": {"users:/bar:read"},
+					"other": {"users:/bar:read"},
+				},
+			},
+			want: false,
+		},
+		{
+			name:                  "AND - match only scheme",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"bearer": {},
+				},
+			},
+			want: true,
+		},
+		{
+			name:                  "AND - does not match all schemes",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"bearer": {},
+					"oauth2": {},
+				},
+			},
+			want: false,
+		},
+		{
+			name:                  "AND - matches all schemes",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {},
+				"oauth2": {},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"bearer": {},
+					"oauth2": {},
+				},
+			},
+			want: true,
+		},
+		{
+			name:                  "OR - matches one of the schemes",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"bearer": {},
+				},
+				{
+					"oauth2": {},
+				},
+			},
+			want: true,
+		},
+		{
+			name:                  "OR - matches none of the schemes",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"foo": {},
+				},
+				{
+					"oauth2": {},
 				},
 			},
 			want: false,
@@ -354,7 +428,7 @@ func TestEntitlementsChecker_VerifyResourceEntitlements(t *testing.T) {
 			name:                  "identity entitlements are needed",
 			anonymousEntitlements: []string{},
 			resource:              "pages",
-			resourceName:          "all",
+			resourceName:          "foo",
 			entitlements:          entitlements.Entitlements{},
 			requirements:          entitlements.Requirements{},
 			want:                  false,
@@ -374,7 +448,7 @@ func TestEntitlementsChecker_VerifyResourceEntitlements(t *testing.T) {
 			resource:              "pages",
 			resourceName:          "foo",
 			entitlements: entitlements.Entitlements{
-				"_": {"pages:write"},
+				"bearer": {"pages:write"},
 			},
 			requirements: entitlements.Requirements{},
 			want:         true,
@@ -386,7 +460,7 @@ func TestEntitlementsChecker_VerifyResourceEntitlements(t *testing.T) {
 			resourceName:          "foo",
 			entitlements:          entitlements.Entitlements{},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:write"}},
+				{"bearer": {"pages:write"}},
 			},
 			want: false,
 		},
@@ -396,10 +470,10 @@ func TestEntitlementsChecker_VerifyResourceEntitlements(t *testing.T) {
 			resource:              "pages",
 			resourceName:          "foo",
 			entitlements: entitlements.Entitlements{
-				"_": {"pages:write"},
+				"bearer": {"pages:write"},
 			},
 			requirements: entitlements.Requirements{
-				{"_": {"pages:write"}},
+				{"bearer": {"pages:write"}},
 			},
 			want: true,
 		},
