@@ -104,9 +104,7 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 	}
 	// When there are no entitlements, the anonymous entitlements are added
 	if !added {
-		for _, anonEntitlement := range ec.anonymousEntitlements {
-			clonedEntitlements["_"] = append(clonedEntitlements["_"], anonEntitlement)
-		}
+		clonedEntitlements["_"] = append(clonedEntitlements["_"], ec.anonymousEntitlements...)
 	}
 
 	// We need to align the entitlement schemes with the requirement schemes
