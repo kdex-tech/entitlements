@@ -56,28 +56,21 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 	identity := fmt.Sprintf("%s:%s:read", resource, resourceName)
 
 	// The identity requirement is added to all requirements
-	added := false
-	for _, req := range requirements {
-		for k, v := range req {
-			if k == "_" && !slices.Contains(v, identity) {
-				v = append(v, identity)
-				req[k] = v
-				added = true
-			}
+	if len(requirements) == 0 {
+		requirements = append(requirements, map[string][]string{
+			"_": {identity},
+		})
+	} else {
+		for _, req := range requirements {
+			req["_"] = append(req["_"], identity)
 		}
 	}
-	// When there are no explicit requirements, the identity requirement is added to all groups
-	if !added {
-		if len(requirements) == 0 {
-			requirements = append(requirements, map[string][]string{
-				"_": {identity},
-			})
-		} else {
-			for _, req := range requirements {
-				req["_"] = append(req["_"], identity)
-			}
-		}
-	}
+
+	// Make sure never to write back
+	entitlements = deepCloneEntitlements(entitlements)
+
+	// The identity entitlement is added to all entitlements
+	entitlements["_"] = append(entitlements["_"], identity)
 
 	return ec.VerifyEntitlements(entitlements, requirements)
 }
@@ -95,16 +88,17 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 		return true
 	}
 
+	// The entitlements granted to anonymous are added to the "_" scheme
 	if len(ec.anonymousEntitlements) > 0 {
-		// The entitlements granted to anonymous are added to the "_" scheme
+		// Make sure never to write back
 		entitlements = deepCloneEntitlements(entitlements)
 
 		added := false
-		for _, anonEntitlement := range ec.anonymousEntitlements {
-			for k, v := range entitlements {
-				if k == "_" && !slices.Contains(v, anonEntitlement) {
-					v = append(v, anonEntitlement)
-					entitlements[k] = v
+		for scheme, entitlementList := range entitlements {
+			for _, anonEntitlement := range ec.anonymousEntitlements {
+				if scheme == "_" && !slices.Contains(entitlementList, anonEntitlement) {
+					entitlementList = append(entitlementList, anonEntitlement)
+					entitlements[scheme] = entitlementList
 					added = true
 				}
 			}

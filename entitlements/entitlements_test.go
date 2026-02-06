@@ -425,17 +425,8 @@ func TestEntitlementsChecker_VerifyResourceEntitlements(t *testing.T) {
 		want                  bool
 	}{
 		{
-			name:                  "identity entitlements are needed",
+			name:                  "identity entitlements are enough",
 			anonymousEntitlements: []string{},
-			resource:              "pages",
-			resourceName:          "foo",
-			entitlements:          entitlements.Entitlements{},
-			requirements:          entitlements.Requirements{},
-			want:                  false,
-		},
-		{
-			name:                  "identity entitlements are added by anonymousEntitlements",
-			anonymousEntitlements: []string{"pages:read"},
 			resource:              "pages",
 			resourceName:          "foo",
 			entitlements:          entitlements.Entitlements{},
@@ -443,8 +434,8 @@ func TestEntitlementsChecker_VerifyResourceEntitlements(t *testing.T) {
 			want:                  true,
 		},
 		{
-			name:                  "anonymousEntitlements are enough",
-			anonymousEntitlements: []string{"pages:read"},
+			name:                  "identity entitlements are enough even with other entitlements",
+			anonymousEntitlements: []string{},
 			resource:              "pages",
 			resourceName:          "foo",
 			entitlements: entitlements.Entitlements{
@@ -454,8 +445,8 @@ func TestEntitlementsChecker_VerifyResourceEntitlements(t *testing.T) {
 			want:         true,
 		},
 		{
-			name:                  "requirements are raised above anonymousEntitlements",
-			anonymousEntitlements: []string{"pages:read"},
+			name:                  "requirements are raised above identity entitlements",
+			anonymousEntitlements: []string{},
 			resource:              "pages",
 			resourceName:          "foo",
 			entitlements:          entitlements.Entitlements{},
@@ -465,8 +456,8 @@ func TestEntitlementsChecker_VerifyResourceEntitlements(t *testing.T) {
 			want: false,
 		},
 		{
-			name:                  "requirements are raised above anonymousEntitlements and met by entitlements",
-			anonymousEntitlements: []string{"pages:read"},
+			name:                  "requirements are raised above identity entitlements and met by entitlements",
+			anonymousEntitlements: []string{},
 			resource:              "pages",
 			resourceName:          "foo",
 			entitlements: entitlements.Entitlements{
