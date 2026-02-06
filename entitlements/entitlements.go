@@ -107,14 +107,22 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 		clonedEntitlements["_"] = append(clonedEntitlements["_"], ec.anonymousEntitlements...)
 	}
 
-	// We need to align the entitlement schemes with the requirement schemes
-	for se, v := range clonedEntitlements {
-		for _, requirement := range requirements {
-			// Requirements are OR'd - user needs to satisfy at least one
-			for re, reqs := range requirement {
-				if se == re && ec.satisfiesRequirement(v, reqs) {
-					return true
-				}
+	// Here requirements are OR'd - user needs to satisfy at least one
+	for _, requirement := range requirements {
+		if ec.satisfiesAndRequirements(clonedEntitlements, requirement) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string][]string, requirement map[string][]string) bool {
+	// Here requirements are AND'ed - user must have match all
+	for re, reqs := range requirement {
+		for se, v := range entitlements {
+			if se == re && ec.satisfiesRequirement(v, reqs) {
+				return true
 			}
 		}
 	}
@@ -124,10 +132,9 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 
 // satisfiesRequirement checks if user entitlements satisfy a single security requirement.
 // Within a requirement, all entitlements must be present (AND logic).
-func (ac *EntitlementsChecker) satisfiesRequirement(entitlements []string, requirement []string) bool {
-	// Requirements are AND'ed - Check if user has all required entitlements
+func (ec *EntitlementsChecker) satisfiesRequirement(entitlements []string, requirement []string) bool {
 	for _, curRequirement := range requirement {
-		if !ac.hasEntitlement(entitlements, curRequirement) {
+		if !ec.hasEntitlement(entitlements, curRequirement) {
 			return false
 		}
 	}
@@ -136,9 +143,9 @@ func (ac *EntitlementsChecker) satisfiesRequirement(entitlements []string, requi
 }
 
 // hasEntitlement checks if the user has a specific entitlement.
-func (ac *EntitlementsChecker) hasEntitlement(entitlements []string, requirement string) bool {
+func (ec *EntitlementsChecker) hasEntitlement(entitlements []string, requirement string) bool {
 	for _, entitlement := range entitlements {
-		if ac.entitlementMatches(entitlement, requirement) {
+		if ec.entitlementMatches(entitlement, requirement) {
 			return true
 		}
 	}
@@ -146,7 +153,7 @@ func (ac *EntitlementsChecker) hasEntitlement(entitlements []string, requirement
 }
 
 // entitlementMatches checks if a user entitlement matches a required entitlement.
-func (ac *EntitlementsChecker) entitlementMatches(entitlement, requirement string) bool {
+func (ec *EntitlementsChecker) entitlementMatches(entitlement, requirement string) bool {
 	// Exact match
 	if entitlement == requirement {
 		return true
