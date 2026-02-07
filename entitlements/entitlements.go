@@ -27,15 +27,28 @@ import (
 //   - email -           exact match only (opaque form)
 type EntitlementsChecker struct {
 	anonymousEntitlements []string
+	defaultScheme         string
+	grantReadyByDefault   bool
 }
 
 type Entitlements map[string][]string
 type Requirements []map[string][]string
 
 // NewEntitlementsChecker creates a new entitlements checker.
-func NewEntitlementsChecker(anonymousEntitlements []string) *EntitlementsChecker {
+// anonymousEntitlements is an array of entitlements granted in anonymous (not logged in) access scenarios.
+// grantReadyByDefault should be true when the system is ready by default, false otherwise.
+func NewEntitlementsChecker(
+	anonymousEntitlements []string,
+	defaultScheme string,
+	grantReadyByDefault bool,
+) *EntitlementsChecker {
+	if defaultScheme == "" {
+		defaultScheme = "bearer"
+	}
 	return &EntitlementsChecker{
 		anonymousEntitlements: anonymousEntitlements,
+		defaultScheme:         defaultScheme,
+		grantReadyByDefault:   grantReadyByDefault,
 	}
 }
 
@@ -58,11 +71,11 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 	// The identity requirement is added to all requirements
 	if len(requirements) == 0 {
 		requirements = append(requirements, map[string][]string{
-			"_": {identity},
+			ec.defaultScheme: {identity},
 		})
 	} else {
 		for _, req := range requirements {
-			req["_"] = append(req["_"], identity)
+			req[ec.defaultScheme] = append(req[ec.defaultScheme], identity)
 		}
 	}
 
@@ -70,7 +83,9 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 	entitlements = deepCloneEntitlements(entitlements)
 
 	// The identity entitlement is added to all entitlements
-	entitlements["_"] = append(entitlements["_"], identity)
+	if ec.grantReadyByDefault {
+		entitlements[ec.defaultScheme] = append(entitlements[ec.defaultScheme], identity)
+	}
 
 	return ec.VerifyEntitlements(entitlements, requirements)
 }
@@ -88,7 +103,7 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 		return true
 	}
 
-	// The entitlements granted to anonymous are added to the "_" scheme
+	// The entitlements granted to anonymous are added to the default scheme
 	if len(ec.anonymousEntitlements) > 0 {
 		// Make sure never to write back
 		entitlements = deepCloneEntitlements(entitlements)
@@ -96,7 +111,7 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 		added := false
 		for scheme, entitlementList := range entitlements {
 			for _, anonEntitlement := range ec.anonymousEntitlements {
-				if scheme == "_" && !slices.Contains(entitlementList, anonEntitlement) {
+				if scheme == ec.defaultScheme && !slices.Contains(entitlementList, anonEntitlement) {
 					entitlementList = append(entitlementList, anonEntitlement)
 					entitlements[scheme] = entitlementList
 					added = true
@@ -105,7 +120,7 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 		}
 		// When there are no entitlements, the anonymous entitlements are added
 		if !added {
-			entitlements["_"] = append(entitlements["_"], ec.anonymousEntitlements...)
+			entitlements[ec.defaultScheme] = append(entitlements[ec.defaultScheme], ec.anonymousEntitlements...)
 		}
 	}
 
