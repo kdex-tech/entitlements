@@ -55,6 +55,37 @@ func NewEntitlementsChecker(
 	}
 }
 
+// CalculateResourceRequirements calculates the requirements for a resource instance.
+// It returns a copy of the requirements with the identity requirement added.
+func (ec *EntitlementsChecker) CalculateResourceRequirements(
+	resource string,
+	resourceName string,
+	requirements Requirements,
+) (Requirements, error) {
+	if resource == "" || resourceName == "" {
+		return nil, fmt.Errorf("resource and resourceName must not be empty")
+	}
+
+	// Make sure never to write back
+	requirements = deepCloneRequirements(requirements)
+
+	// In order for pattern matching to work we need to create and add an identity requirement.
+	identity := fmt.Sprintf("%s:%s:read", resource, resourceName)
+
+	// The identity requirement is added to all requirements
+	if len(requirements) == 0 {
+		requirements = append(requirements, map[string][]string{
+			ec.defaultScheme: {identity},
+		})
+	} else {
+		for _, req := range requirements {
+			req[ec.defaultScheme] = append(req[ec.defaultScheme], identity)
+		}
+	}
+
+	return requirements, nil
+}
+
 // VerifyResourceEntitlements checks if the user's entitlements satisfy the security requirements for a resource instance.
 // Requirements is an array of map[string][]string where each map holds the requirements for a given scheme.
 // The outer array is OR'd - user needs to satisfy at least one scheme.
@@ -64,7 +95,11 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 	resourceName string,
 	entitlements Entitlements,
 	requirements Requirements,
-) bool {
+) (bool, error) {
+	if resource == "" || resourceName == "" {
+		return false, fmt.Errorf("resource and resourceName must not be empty")
+	}
+
 	// Make sure never to write back
 	requirements = deepCloneRequirements(requirements)
 
@@ -90,7 +125,7 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 		entitlements[ec.defaultScheme] = append(entitlements[ec.defaultScheme], identity)
 	}
 
-	return ec.VerifyEntitlements(entitlements, requirements)
+	return ec.VerifyEntitlements(entitlements, requirements), nil
 }
 
 // VerifyEntitlements checks if the user's entitlements satisfy the security requirements.

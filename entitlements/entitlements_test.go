@@ -472,7 +472,8 @@ func TestEntitlementsChecker_VerifyResourceEntitlements_ReadByDefault_True(t *te
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ec := entitlements.NewEntitlementsChecker(tt.anonymousEntitlements, "bearer", true)
-			got := ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			got, err := ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			assert.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -536,7 +537,82 @@ func TestEntitlementsChecker_VerifyResourceEntitlements_ReadByDefault_False(t *t
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ec := entitlements.NewEntitlementsChecker(tt.anonymousEntitlements, "", false)
-			got := ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			got, err := ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestEntitlementsChecker_CalculateResourceRequirements(t *testing.T) {
+	tests := []struct {
+		name          string
+		defaultScheme string
+		resource      string
+		resourceName  string
+		requirements  entitlements.Requirements
+		want          entitlements.Requirements
+		wantErr       string
+	}{
+		{
+			name:          "no resource",
+			defaultScheme: "bearer",
+			resource:      "",
+			resourceName:  "foo",
+			requirements:  entitlements.Requirements{},
+			wantErr:       "resource and resourceName must not be empty",
+		},
+		{
+			name:          "no resource name",
+			defaultScheme: "bearer",
+			resource:      "pages",
+			resourceName:  "",
+			requirements:  entitlements.Requirements{},
+			wantErr:       "resource and resourceName must not be empty",
+		},
+		{
+			name:          "no requirements",
+			defaultScheme: "bearer",
+			resource:      "pages",
+			resourceName:  "foo",
+			requirements:  entitlements.Requirements{},
+			want:          entitlements.Requirements{{"bearer": {"pages:foo:read"}}},
+		},
+		{
+			name:          "requirements",
+			defaultScheme: "bearer",
+			resource:      "pages",
+			resourceName:  "foo",
+			requirements:  entitlements.Requirements{{"bearer": {"pages:write"}}},
+			want:          entitlements.Requirements{{"bearer": {"pages:write", "pages:foo:read"}}},
+		},
+		{
+			name:          "requirements with different scheme",
+			defaultScheme: "bar",
+			resource:      "pages",
+			resourceName:  "foo",
+			requirements:  entitlements.Requirements{{"bar": {"pages:write"}}},
+			want:          entitlements.Requirements{{"bar": {"pages:write", "pages:foo:read"}}},
+		},
+		{
+			name:          "requirements with different schemes",
+			defaultScheme: "bar",
+			resource:      "pages",
+			resourceName:  "foo",
+			requirements:  entitlements.Requirements{{"bearer": {"pages:write"}}},
+			want:          entitlements.Requirements{{"bar": {"pages:foo:read"}, "bearer": {"pages:write"}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ec := entitlements.NewEntitlementsChecker([]string{}, tt.defaultScheme, false)
+			got, gotErr := ec.CalculateResourceRequirements(tt.resource, tt.resourceName, tt.requirements)
+			if tt.wantErr != "" {
+				assert.Error(t, gotErr)
+				assert.Contains(t, gotErr.Error(), tt.wantErr)
+				return
+			}
+			assert.NoError(t, gotErr)
 			assert.Equal(t, tt.want, got)
 		})
 	}
