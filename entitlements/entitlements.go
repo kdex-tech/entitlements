@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/go-logr/logr"
 )
 
 // Entitlements support exact match and wildcard patterns.
@@ -29,6 +31,7 @@ type EntitlementsChecker struct {
 	anonymousEntitlements []string
 	defaultScheme         string
 	grantReadyByDefault   bool
+	log                   *logr.Logger
 }
 
 type Entitlements map[string][]string
@@ -97,7 +100,7 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 func (ec *EntitlementsChecker) VerifyEntitlements(
 	entitlements Entitlements,
 	requirements Requirements,
-) bool {
+) (result bool) {
 	// If there are no requirements, access is granted
 	if len(requirements) == 0 {
 		return true
@@ -124,14 +127,27 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 		}
 	}
 
+	defer func() {
+		if ec.log != nil {
+			ec.log.V(2).Info("Verified entitlements", "entitlements", entitlements, "requirements", requirements, "result", result)
+		}
+	}()
+
 	// Here requirements are OR'd - user needs to satisfy at least one
 	for _, requirement := range requirements {
 		if ec.satisfiesAndRequirements(entitlements, requirement) {
-			return true
+			result = true
+			return
 		}
 	}
 
-	return false
+	result = false
+	return
+}
+
+func (ec *EntitlementsChecker) WithLogger(log logr.Logger) *EntitlementsChecker {
+	ec.log = &log
+	return ec
 }
 
 func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string][]string, requirement map[string][]string) bool {
