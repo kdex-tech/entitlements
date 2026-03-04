@@ -9,9 +9,9 @@ import (
 	"github.com/go-logr/logr"
 )
 
-var (
-	// patternCache stores pre-parsed entitlementPattern objects to avoid redundant strings.Split calls.
-	patternCache sync.Map
+const (
+	// maxCacheSize prevents the interning cache from growing indefinitely.
+	maxCacheSize = 10000
 )
 
 // Entitlements support exact match and wildcard patterns.
@@ -35,9 +35,11 @@ var (
 //   - email -           exact match only (opaque form)
 type EntitlementsChecker struct {
 	anonymousPatterns   []entitlementPattern
+	cache               map[string]entitlementPattern
 	defaultScheme       string
 	grantReadyByDefault bool
 	log                 *logr.Logger
+	mu                  sync.RWMutex
 }
 
 type entitlementPattern struct {
@@ -62,6 +64,7 @@ func NewEntitlementsChecker(
 	}
 
 	ec := &EntitlementsChecker{
+		cache:               make(map[string]entitlementPattern),
 		defaultScheme:       defaultScheme,
 		grantReadyByDefault: grantReadyByDefault,
 	}
@@ -69,60 +72,64 @@ func NewEntitlementsChecker(
 	if len(anonymousEntitlements) > 0 {
 		ec.anonymousPatterns = make([]entitlementPattern, len(anonymousEntitlements))
 		for i, s := range anonymousEntitlements {
-			ec.anonymousPatterns[i] = parseEntitlementPattern(s)
+			ec.anonymousPatterns[i] = ec.parsePattern(s)
 		}
 	}
 
 	return ec
 }
 
-func parseEntitlementPattern(s string) entitlementPattern {
+func (ec *EntitlementsChecker) parsePattern(s string) entitlementPattern {
 	// 1. Check the interning cache first
-	if val, ok := patternCache.Load(s); ok {
-		return val.(entitlementPattern)
+	ec.mu.RLock()
+	p, ok := ec.cache[s]
+	ec.mu.RUnlock()
+	if ok {
+		return p
 	}
 
 	// 2. Optimization: If no colon is present, it's definitely an opaque form.
 	// This avoids the allocation of strings.Split for simple strings.
-	firstColon := strings.IndexByte(s, ':')
-	if firstColon == -1 {
-		p := entitlementPattern{
+	if !strings.Contains(s, ":") {
+		p = entitlementPattern{
 			raw:       s,
 			isPattern: false,
-		}
-		patternCache.Store(s, p)
-		return p
-	}
-
-	parts := strings.Split(s, ":")
-	var p entitlementPattern
-
-	// short syntax was used <resource>:<verb> which is equal to <resource>::<verb>, or <resource>:*:<verb>
-	if len(parts) == 2 {
-		p = entitlementPattern{
-			raw:          s,
-			resource:     parts[0],
-			resourceName: "",
-			verb:         parts[1],
-			isPattern:    true,
-		}
-	} else if len(parts) == 3 {
-		p = entitlementPattern{
-			raw:          s,
-			resource:     parts[0],
-			resourceName: parts[1],
-			verb:         parts[2],
-			isPattern:    true,
 		}
 	} else {
-		// Opaque form or invalid structure (e.g. too many colons)
-		p = entitlementPattern{
-			raw:       s,
-			isPattern: false,
+		parts := strings.Split(s, ":")
+
+		// short syntax was used <resource>:<verb> which is equal to <resource>::<verb>, or <resource>:*:<verb>
+		if len(parts) == 2 {
+			p = entitlementPattern{
+				raw:          s,
+				resource:     parts[0],
+				resourceName: "",
+				verb:         parts[1],
+				isPattern:    true,
+			}
+		} else if len(parts) == 3 {
+			p = entitlementPattern{
+				raw:          s,
+				resource:     parts[0],
+				resourceName: parts[1],
+				verb:         parts[2],
+				isPattern:    true,
+			}
+		} else {
+			// Opaque form or invalid structure (e.g. too many colons)
+			p = entitlementPattern{
+				raw:       s,
+				isPattern: false,
+			}
 		}
 	}
 
-	patternCache.Store(s, p)
+	// 3. Store in cache if there is room
+	ec.mu.Lock()
+	defer ec.mu.Unlock()
+	if len(ec.cache) < maxCacheSize {
+		ec.cache[s] = p
+	}
 	return p
 }
 
@@ -207,7 +214,7 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 
 	// 2. Check if user satisfies the resource identity requirement.
 	identity := resource + ":" + resourceName + ":read"
-	parsedIdentity := parseEntitlementPattern(identity)
+	parsedIdentity := ec.parsePattern(identity)
 
 	hasIdentity := ec.grantReadyByDefault || ec.hasParsedEntitlement(parsedEntitlements[ec.defaultScheme], ec.defaultScheme, parsedIdentity)
 	if !hasIdentity {
@@ -215,6 +222,7 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 	}
 
 	// 3. Verify the rest of the requirements.
+	// If there are no additional requirements, access is granted.
 	if len(requirements) == 0 {
 		return true, nil
 	}
@@ -246,7 +254,7 @@ func (ec *EntitlementsChecker) parseRequirements(requirements Requirements) pars
 		for scheme, list := range req {
 			patterns := make([]entitlementPattern, len(list))
 			for j, s := range list {
-				patterns[j] = parseEntitlementPattern(s)
+				patterns[j] = ec.parsePattern(s)
 			}
 			newReq[scheme] = patterns
 		}
@@ -260,7 +268,7 @@ func (ec *EntitlementsChecker) parseEntitlements(entitlements Entitlements) map[
 	for scheme, list := range entitlements {
 		patterns := make([]entitlementPattern, len(list))
 		for i, s := range list {
-			patterns[i] = parseEntitlementPattern(s)
+			patterns[i] = ec.parsePattern(s)
 		}
 		parsed[scheme] = patterns
 	}
@@ -273,6 +281,7 @@ func (ec *EntitlementsChecker) verifyEntitlements(
 ) (result bool) {
 	defer func() {
 		if ec.log != nil {
+			// We log the raw requirements for debugging
 			ec.log.V(2).Info("Verified entitlements", "result", result)
 		}
 	}()
