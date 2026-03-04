@@ -4,8 +4,14 @@ import (
 	"fmt"
 	"maps"
 	"strings"
+	"sync"
 
 	"github.com/go-logr/logr"
+)
+
+var (
+	// patternCache stores pre-parsed entitlementPattern objects to avoid redundant strings.Split calls.
+	patternCache sync.Map
 )
 
 // Entitlements support exact match and wildcard patterns.
@@ -71,44 +77,53 @@ func NewEntitlementsChecker(
 }
 
 func parseEntitlementPattern(s string) entitlementPattern {
-	// Optimization: If no colon is present, it's definitely an opaque form.
+	// 1. Check the interning cache first
+	if val, ok := patternCache.Load(s); ok {
+		return val.(entitlementPattern)
+	}
+
+	// 2. Optimization: If no colon is present, it's definitely an opaque form.
 	// This avoids the allocation of strings.Split for simple strings.
-	found := strings.Contains(s, ":")
-	if !found {
-		return entitlementPattern{
+	firstColon := strings.IndexByte(s, ':')
+	if firstColon == -1 {
+		p := entitlementPattern{
 			raw:       s,
 			isPattern: false,
 		}
+		patternCache.Store(s, p)
+		return p
 	}
 
 	parts := strings.Split(s, ":")
+	var p entitlementPattern
 
 	// short syntax was used <resource>:<verb> which is equal to <resource>::<verb>, or <resource>:*:<verb>
 	if len(parts) == 2 {
-		return entitlementPattern{
+		p = entitlementPattern{
 			raw:          s,
 			resource:     parts[0],
 			resourceName: "",
 			verb:         parts[1],
 			isPattern:    true,
 		}
-	}
-
-	if len(parts) == 3 {
-		return entitlementPattern{
+	} else if len(parts) == 3 {
+		p = entitlementPattern{
 			raw:          s,
 			resource:     parts[0],
 			resourceName: parts[1],
 			verb:         parts[2],
 			isPattern:    true,
 		}
+	} else {
+		// Opaque form or invalid structure (e.g. too many colons)
+		p = entitlementPattern{
+			raw:       s,
+			isPattern: false,
+		}
 	}
 
-	// Opaque form or invalid structure (e.g. too many colons)
-	return entitlementPattern{
-		raw:       s,
-		isPattern: false,
-	}
+	patternCache.Store(s, p)
+	return p
 }
 
 func (ep entitlementPattern) matches(req entitlementPattern) bool {
