@@ -2,6 +2,7 @@ package entitlements
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -72,8 +73,8 @@ func NewEntitlementsChecker(
 func parseEntitlementPattern(s string) entitlementPattern {
 	// Optimization: If no colon is present, it's definitely an opaque form.
 	// This avoids the allocation of strings.Split for simple strings.
-	firstColon := strings.IndexByte(s, ':')
-	if firstColon == -1 {
+	found := strings.Contains(s, ":")
+	if !found {
 		return entitlementPattern{
 			raw:       s,
 			isPattern: false,
@@ -139,7 +140,7 @@ func (ep entitlementPattern) matches(req entitlementPattern) bool {
 
 	// Specific resource name must match
 	return ep.resourceName == req.resourceName
-	}
+}
 
 // CalculateResourceRequirements calculates the requirements for a resource instance.
 // It returns a copy of the requirements with the identity requirement added.
@@ -165,9 +166,7 @@ func (ec *EntitlementsChecker) CalculateResourceRequirements(
 	} else {
 		for _, req := range requirements {
 			newReq := make(map[string][]string, len(req))
-			for k, v := range req {
-				newReq[k] = v
-			}
+			maps.Copy(newReq, req)
 			newReq[ec.defaultScheme] = append(newReq[ec.defaultScheme], identity)
 			newRequirements = append(newRequirements, newReq)
 		}
@@ -266,7 +265,7 @@ func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string]
 	for scheme, requirementList := range requirement {
 		// A scheme is satisfied if it's present in entitlements OR it's the default scheme and we have anonymous entitlements.
 		_, ok := entitlements[scheme]
-		if !ok && !(scheme == ec.defaultScheme && len(ec.anonymousPatterns) > 0) {
+		if !ok && (scheme != ec.defaultScheme || len(ec.anonymousPatterns) <= 0) {
 			return false
 		}
 
@@ -310,4 +309,3 @@ func (ec *EntitlementsChecker) hasParsedEntitlement(entitlementList []entitlemen
 
 	return false
 }
-
