@@ -617,3 +617,51 @@ func TestEntitlementsChecker_CalculateResourceRequirements(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkVerifyEntitlements_Simple(b *testing.B) {
+	ec := entitlements.NewEntitlementsChecker(nil, "bearer", false)
+	userEntitlements := entitlements.Entitlements{
+		"bearer": {"pages:read"},
+	}
+	reqs := entitlements.Requirements{
+		{"bearer": {"pages:read"}},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ec.VerifyEntitlements(userEntitlements, reqs)
+	}
+}
+
+func BenchmarkVerifyEntitlements_Complex(b *testing.B) {
+	ec := entitlements.NewEntitlementsChecker([]string{"public:read"}, "bearer", false)
+	userEntitlements := entitlements.Entitlements{
+		"bearer": {"pages:read", "books:write", "admin:all"},
+		"oauth2": {"scope1", "scope2"},
+	}
+	reqs := entitlements.Requirements{
+		{"bearer": {"pages:read", "books:write"}},
+		{"oauth2": {"scope2"}},
+		{"bearer": {"admin:read"}},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ec.VerifyEntitlements(userEntitlements, reqs)
+	}
+}
+
+func BenchmarkVerifyResourceEntitlements(b *testing.B) {
+	ec := entitlements.NewEntitlementsChecker(nil, "bearer", false)
+	userEntitlements := entitlements.Entitlements{
+		"bearer": {"pages:foo:read", "other:all"},
+	}
+	reqs := entitlements.Requirements{
+		{"bearer": {"other:read"}},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = ec.VerifyResourceEntitlements("pages", "foo", userEntitlements, reqs)
+	}
+}
