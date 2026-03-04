@@ -27,18 +27,24 @@ import (
 //   - pages:all -       all access to all pages (short form)
 //   - email -           exact match only (opaque form)
 type EntitlementsChecker struct {
-	anonymousEntitlements []string
-	defaultScheme         string
-	grantReadyByDefault   bool
-	log                   *logr.Logger
+	anonymousPatterns   []entitlementPattern
+	defaultScheme       string
+	grantReadyByDefault bool
+	log                 *logr.Logger
+}
+
+type entitlementPattern struct {
+	raw          string
+	resource     string
+	resourceName string
+	verb         string
+	isPattern    bool
 }
 
 type Entitlements map[string][]string
 type Requirements []map[string][]string
 
 // NewEntitlementsChecker creates a new entitlements checker.
-// anonymousEntitlements is an array of entitlements granted in anonymous (not logged in) access scenarios.
-// grantReadyByDefault should be true when the system is ready by default, false otherwise.
 func NewEntitlementsChecker(
 	anonymousEntitlements []string,
 	defaultScheme string,
@@ -47,12 +53,93 @@ func NewEntitlementsChecker(
 	if defaultScheme == "" {
 		defaultScheme = "bearer"
 	}
-	return &EntitlementsChecker{
-		anonymousEntitlements: anonymousEntitlements,
-		defaultScheme:         defaultScheme,
-		grantReadyByDefault:   grantReadyByDefault,
+
+	ec := &EntitlementsChecker{
+		defaultScheme:       defaultScheme,
+		grantReadyByDefault: grantReadyByDefault,
+	}
+
+	if len(anonymousEntitlements) > 0 {
+		ec.anonymousPatterns = make([]entitlementPattern, len(anonymousEntitlements))
+		for i, s := range anonymousEntitlements {
+			ec.anonymousPatterns[i] = parseEntitlementPattern(s)
+		}
+	}
+
+	return ec
+}
+
+func parseEntitlementPattern(s string) entitlementPattern {
+	// Optimization: If no colon is present, it's definitely an opaque form.
+	// This avoids the allocation of strings.Split for simple strings.
+	firstColon := strings.IndexByte(s, ':')
+	if firstColon == -1 {
+		return entitlementPattern{
+			raw:       s,
+			isPattern: false,
+		}
+	}
+
+	parts := strings.Split(s, ":")
+
+	// short syntax was used <resource>:<verb> which is equal to <resource>::<verb>, or <resource>:*:<verb>
+	if len(parts) == 2 {
+		return entitlementPattern{
+			raw:          s,
+			resource:     parts[0],
+			resourceName: "",
+			verb:         parts[1],
+			isPattern:    true,
+		}
+	}
+
+	if len(parts) == 3 {
+		return entitlementPattern{
+			raw:          s,
+			resource:     parts[0],
+			resourceName: parts[1],
+			verb:         parts[2],
+			isPattern:    true,
+		}
+	}
+
+	// Opaque form or invalid structure (e.g. too many colons)
+	return entitlementPattern{
+		raw:       s,
+		isPattern: false,
 	}
 }
+
+func (ep entitlementPattern) matches(req entitlementPattern) bool {
+	// Exact match is always the fastest path
+	if ep.raw == req.raw {
+		return true
+	}
+
+	// If either is not a pattern (opaque), only exact match (above) works
+	if !ep.isPattern || !req.isPattern {
+		return false
+	}
+
+	// Resource type must match
+	if ep.resource != req.resource {
+		return false
+	}
+
+	// Verb must match (or entitlement provides "all")
+	if ep.verb != "all" && ep.verb != req.verb {
+		return false
+	}
+
+	// Check resource name with wildcard support
+	// Empty string or "*" in either side means all resources
+	if ep.resourceName == "" || ep.resourceName == "*" || req.resourceName == "" || req.resourceName == "*" {
+		return true
+	}
+
+	// Specific resource name must match
+	return ep.resourceName == req.resourceName
+	}
 
 // CalculateResourceRequirements calculates the requirements for a resource instance.
 // It returns a copy of the requirements with the identity requirement added.
@@ -100,18 +187,25 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 		return false, fmt.Errorf("resource and resourceName must not be empty")
 	}
 
-	// 1. Check if user satisfies the resource identity requirement.
-	// This is AND'ed into all requirements, so if this fails, everything fails.
-	identity := fmt.Sprintf("%s:%s:read", resource, resourceName)
+	// 1. Pre-parse user entitlements once.
+	parsedEntitlements := ec.parseEntitlements(entitlements)
 
-	// If grantReadyByDefault is true, we implicitly grant the identity entitlement.
-	hasIdentity := ec.grantReadyByDefault || ec.hasEntitlement(entitlements, ec.defaultScheme, identity)
+	// 2. Check if user satisfies the resource identity requirement.
+	identity := fmt.Sprintf("%s:%s:read", resource, resourceName)
+	parsedIdentity := parseEntitlementPattern(identity)
+
+	hasIdentity := ec.grantReadyByDefault || ec.hasParsedEntitlement(parsedEntitlements[ec.defaultScheme], ec.defaultScheme, parsedIdentity)
 	if !hasIdentity {
 		return false, nil
 	}
 
-	// 2. Verify the rest of the requirements.
-	return ec.VerifyEntitlements(entitlements, requirements), nil
+	// 3. Verify the rest of the requirements.
+	// If there are no additional requirements, access is granted.
+	if len(requirements) == 0 {
+		return true, nil
+	}
+
+	return ec.verifyEntitlements(parsedEntitlements, requirements), nil
 }
 
 // VerifyEntitlements checks if the user's entitlements satisfy the security requirements.
@@ -119,14 +213,34 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 	entitlements Entitlements,
 	requirements Requirements,
 ) (result bool) {
-	// If there are no requirements, access is granted
 	if len(requirements) == 0 {
 		return true
 	}
 
+	parsedEntitlements := ec.parseEntitlements(entitlements)
+	return ec.verifyEntitlements(parsedEntitlements, requirements)
+}
+
+func (ec *EntitlementsChecker) parseEntitlements(entitlements Entitlements) map[string][]entitlementPattern {
+	parsed := make(map[string][]entitlementPattern, len(entitlements))
+	for scheme, list := range entitlements {
+		patterns := make([]entitlementPattern, len(list))
+		for i, s := range list {
+			patterns[i] = parseEntitlementPattern(s)
+		}
+		parsed[scheme] = patterns
+	}
+	return parsed
+}
+
+func (ec *EntitlementsChecker) verifyEntitlements(
+	entitlements map[string][]entitlementPattern,
+	requirements Requirements,
+) (result bool) {
 	defer func() {
 		if ec.log != nil {
-			ec.log.V(2).Info("Verified entitlements", "entitlements", entitlements, "requirements", requirements, "result", result)
+			// We log the raw requirements for debugging
+			ec.log.V(2).Info("Verified entitlements", "requirements", requirements, "result", result)
 		}
 	}()
 
@@ -147,12 +261,12 @@ func (ec *EntitlementsChecker) WithLogger(log logr.Logger) *EntitlementsChecker 
 	return ec
 }
 
-func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string][]string, requirement map[string][]string) bool {
+func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string][]entitlementPattern, requirement map[string][]string) bool {
 	// Here requirements are AND'ed - user must match all
 	for scheme, requirementList := range requirement {
 		// A scheme is satisfied if it's present in entitlements OR it's the default scheme and we have anonymous entitlements.
 		_, ok := entitlements[scheme]
-		if !ok && !(scheme == ec.defaultScheme && len(ec.anonymousEntitlements) > 0) {
+		if !ok && !(scheme == ec.defaultScheme && len(ec.anonymousPatterns) > 0) {
 			return false
 		}
 
@@ -165,10 +279,10 @@ func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string]
 }
 
 // satisfiesRequirement checks if user entitlements satisfy a single security requirement.
-// Within a requirement, all entitlements must be present (AND logic).
-func (ec *EntitlementsChecker) satisfiesRequirement(entitlements map[string][]string, scheme string, requirement []string) bool {
+func (ec *EntitlementsChecker) satisfiesRequirement(entitlements map[string][]entitlementPattern, scheme string, requirement []string) bool {
 	for _, curRequirement := range requirement {
-		if !ec.hasEntitlement(entitlements, scheme, curRequirement) {
+		parsedReq := parseEntitlementPattern(curRequirement)
+		if !ec.hasParsedEntitlement(entitlements[scheme], scheme, parsedReq) {
 			return false
 		}
 	}
@@ -176,79 +290,24 @@ func (ec *EntitlementsChecker) satisfiesRequirement(entitlements map[string][]st
 	return true
 }
 
-// hasEntitlement checks if the user has a specific entitlement.
-func (ec *EntitlementsChecker) hasEntitlement(entitlements map[string][]string, scheme string, requirement string) bool {
+// hasParsedEntitlement checks if the user has a specific entitlement using pre-parsed patterns.
+func (ec *EntitlementsChecker) hasParsedEntitlement(entitlementList []entitlementPattern, scheme string, requirement entitlementPattern) bool {
 	// Check user-provided entitlements for this scheme
-	if entitlementList, ok := entitlements[scheme]; ok {
-		for _, entitlement := range entitlementList {
-			if ec.entitlementMatches(entitlement, requirement) {
-				return true
-			}
+	for _, entitlement := range entitlementList {
+		if entitlement.matches(requirement) {
+			return true
 		}
 	}
 
 	// Check anonymous entitlements if we are checking the default scheme
 	if scheme == ec.defaultScheme {
-		for _, entitlement := range ec.anonymousEntitlements {
-			if ec.entitlementMatches(entitlement, requirement) {
+		for _, pattern := range ec.anonymousPatterns {
+			if pattern.matches(requirement) {
 				return true
 			}
 		}
 	}
 
 	return false
-}
-
-// entitlementMatches checks if a user entitlement matches a required entitlement.
-func (ec *EntitlementsChecker) entitlementMatches(entitlement, requirement string) bool {
-	// Exact match
-	if entitlement == requirement {
-		return true
-	}
-
-	// Parse entitlements
-	parts := strings.Split(entitlement, ":")
-
-	if len(parts) == 2 {
-		// short syntax was used <resource>:<verb> which is equal to <resource>::<verb>, or <resource>:*:<verb>
-		parts = []string{parts[0], "", parts[1]}
-	}
-
-	requiredParts := strings.Split(requirement, ":")
-
-	if len(requiredParts) == 2 {
-		// short syntax was used <resource>:<verb> which is equal to <resource>::<verb>, or <resource>:*:<verb>
-		requiredParts = []string{requiredParts[0], "", requiredParts[1]}
-	}
-
-	// Must have same structure (resource:resourceName:verb)
-	if len(parts) != 3 || len(requiredParts) != 3 {
-		return false
-	}
-
-	// Resource type must match
-	if parts[0] != requiredParts[0] {
-		return false
-	}
-
-	// Verb must match
-	if parts[2] != "all" && parts[2] != requiredParts[2] {
-		return false
-	}
-
-	// Check resource name with wildcard support
-	// Empty string or "*" in entitlement means all resources
-	if parts[1] == "" || parts[1] == "*" {
-		return true
-	}
-
-	// Check resource name with wildcard support
-	// Empty string or "*" in required entitlement means all resources
-	if requiredParts[1] == "" || requiredParts[1] == "*" {
-		return true
-	}
-
-	// Specific resource name must match
-	return parts[1] == requiredParts[1]
 }
 
