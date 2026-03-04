@@ -218,31 +218,45 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 		return false, fmt.Errorf("resource and resourceName must not be empty")
 	}
 
+	parsedEntitlements := ec.ParseEntitlements(entitlements)
+	parsedRequirements := ec.ParseRequirements(requirements)
+	
+	return ec.VerifyResourceParsedEntitlements(resource, resourceName, parsedEntitlements, parsedRequirements, verbs...)
+}
+
+// VerifyResourceParsedEntitlements is a high-performance check that uses pre-parsed entitlements and requirements.
+// It is intended for power users who want to avoid parsing overhead in tight loops.
+func (ec *EntitlementsChecker) VerifyResourceParsedEntitlements(
+	resource string,
+	resourceName string,
+	parsedEntitlements ParsedEntitlements,
+	parsedRequirements ParsedRequirements,
+	verbs ...string,
+) (bool, error) {
+	if resource == "" || resourceName == "" {
+		return false, fmt.Errorf("resource and resourceName must not be empty")
+	}
+
 	verb := "read"
 	if len(verbs) > 0 && verbs[0] != "" {
 		verb = verbs[0]
 	}
 
-	// 1. Pre-parse user entitlements once.
-	parsedEntitlements := ec.parseEntitlements(entitlements)
-
-	// 2. Check if user satisfies the resource identity requirement.
+	// Check if user satisfies the resource identity requirement.
 	identity := resource + ":" + resourceName + ":" + verb
 	parsedIdentity := ec.parsePattern(identity)
 
-	hasIdentity := ec.grantReadyByDefault || ec.hasParsedEntitlement(parsedEntitlements[ec.defaultScheme], ec.defaultScheme, parsedIdentity)
+	hasIdentity := ec.grantReadyByDefault || ec.hasParsedEntitlement(parsedEntitlements.patterns[ec.defaultScheme], ec.defaultScheme, parsedIdentity)
 	if !hasIdentity {
 		return false, nil
 	}
 
-	// 3. Verify the rest of the requirements.
-	// If there are no additional requirements, access is granted.
-	if len(requirements) == 0 {
+	// Verify the rest of the requirements.
+	if len(parsedRequirements.patterns) == 0 {
 		return true, nil
 	}
 
-	parsedRequirements := ec.parseRequirements(requirements)
-	return ec.verifyEntitlements(parsedEntitlements, parsedRequirements), nil
+	return ec.VerifyParsedEntitlements(parsedEntitlements, parsedRequirements), nil
 }
 
 // VerifyEntitlements checks if the user's entitlements satisfy the security requirements.
@@ -254,15 +268,47 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 		return true
 	}
 
-	parsedEntitlements := ec.parseEntitlements(entitlements)
-	parsedRequirements := ec.parseRequirements(requirements)
-	return ec.verifyEntitlements(parsedEntitlements, parsedRequirements)
+	parsedEntitlements := ec.ParseEntitlements(entitlements)
+	parsedRequirements := ec.ParseRequirements(requirements)
+	return ec.VerifyParsedEntitlements(parsedEntitlements, parsedRequirements)
 }
 
-type parsedRequirements []map[string][]entitlementPattern
+// VerifyParsedEntitlements is a high-performance check that uses pre-parsed entitlements and requirements.
+// It is intended for power users who want to avoid parsing overhead in tight loops.
+func (ec *EntitlementsChecker) VerifyParsedEntitlements(
+	entitlements ParsedEntitlements,
+	requirements ParsedRequirements,
+) (result bool) {
+	defer func() {
+		if ec.log != nil {
+			ec.log.V(2).Info("Verified parsed entitlements", "result", result)
+		}
+	}()
 
-func (ec *EntitlementsChecker) parseRequirements(requirements Requirements) parsedRequirements {
-	parsed := make(parsedRequirements, len(requirements))
+	if len(requirements.patterns) == 0 {
+		return true
+	}
+
+	// Here requirements are OR'd - user needs to satisfy at least one
+	for _, requirement := range requirements.patterns {
+		if ec.satisfiesAndRequirements(entitlements.patterns, requirement) {
+			result = true
+			return
+		}
+	}
+
+	result = false
+	return
+}
+
+// ParsedRequirements represents a pre-parsed set of requirements.
+type ParsedRequirements struct {
+	patterns []map[string][]entitlementPattern
+}
+
+// ParseRequirements pre-parses requirements for high-performance verification.
+func (ec *EntitlementsChecker) ParseRequirements(requirements Requirements) ParsedRequirements {
+	parsed := make([]map[string][]entitlementPattern, len(requirements))
 	for i, req := range requirements {
 		newReq := make(map[string][]entitlementPattern, len(req))
 		for scheme, list := range req {
@@ -274,10 +320,16 @@ func (ec *EntitlementsChecker) parseRequirements(requirements Requirements) pars
 		}
 		parsed[i] = newReq
 	}
-	return parsed
+	return ParsedRequirements{patterns: parsed}
 }
 
-func (ec *EntitlementsChecker) parseEntitlements(entitlements Entitlements) map[string][]entitlementPattern {
+// ParsedEntitlements represents a pre-parsed set of user entitlements.
+type ParsedEntitlements struct {
+	patterns map[string][]entitlementPattern
+}
+
+// ParseEntitlements pre-parses entitlements for high-performance verification.
+func (ec *EntitlementsChecker) ParseEntitlements(entitlements Entitlements) ParsedEntitlements {
 	parsed := make(map[string][]entitlementPattern, len(entitlements))
 	for scheme, list := range entitlements {
 		patterns := make([]entitlementPattern, len(list))
@@ -286,30 +338,7 @@ func (ec *EntitlementsChecker) parseEntitlements(entitlements Entitlements) map[
 		}
 		parsed[scheme] = patterns
 	}
-	return parsed
-}
-
-func (ec *EntitlementsChecker) verifyEntitlements(
-	entitlements map[string][]entitlementPattern,
-	requirements parsedRequirements,
-) (result bool) {
-	defer func() {
-		if ec.log != nil {
-			// We log the raw requirements for debugging
-			ec.log.V(2).Info("Verified entitlements", "result", result)
-		}
-	}()
-
-	// Here requirements are OR'd - user needs to satisfy at least one
-	for _, requirement := range requirements {
-		if ec.satisfiesAndRequirements(entitlements, requirement) {
-			result = true
-			return
-		}
-	}
-
-	result = false
-	return
+	return ParsedEntitlements{patterns: parsed}
 }
 
 func (ec *EntitlementsChecker) WithLogger(log logr.Logger) *EntitlementsChecker {

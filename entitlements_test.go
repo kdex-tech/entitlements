@@ -703,3 +703,24 @@ func BenchmarkVerifyResourceEntitlements(b *testing.B) {
 		_, _ = ec.VerifyResourceEntitlements("pages", "foo", userEntitlements, reqs)
 	}
 }
+
+func BenchmarkVerifyParsedEntitlements_Complex(b *testing.B) {
+	ec := entitlements.NewEntitlementsChecker([]string{"public:read"}, "bearer", false)
+	userEntitlements := entitlements.Entitlements{
+		"bearer": {"pages:read", "books:write", "admin:all"},
+		"oauth2": {"scope1", "scope2"},
+	}
+	reqs := entitlements.Requirements{
+		{"bearer": {"pages:read", "books:write"}},
+		{"oauth2": {"scope2"}},
+		{"bearer": {"admin:read"}},
+	}
+
+	parsedEntitlements := ec.ParseEntitlements(userEntitlements)
+	parsedReqs := ec.ParseRequirements(reqs)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ec.VerifyParsedEntitlements(parsedEntitlements, parsedReqs)
+	}
+}
