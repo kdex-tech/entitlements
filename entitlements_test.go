@@ -423,6 +423,7 @@ func TestEntitlementsChecker_VerifyResourceEntitlements_ReadByDefault_True(t *te
 		entitlements          entitlements.Entitlements
 		requirements          entitlements.Requirements
 		want                  bool
+		verb                  string
 	}{
 		{
 			name:                  "identity entitlements are enough",
@@ -472,7 +473,13 @@ func TestEntitlementsChecker_VerifyResourceEntitlements_ReadByDefault_True(t *te
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ec := entitlements.NewEntitlementsChecker(tt.anonymousEntitlements, "bearer", true)
-			got, err := ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			var got bool
+			var err error
+			if tt.verb != "" {
+				got, err = ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements, tt.verb)
+			} else {
+				got, err = ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			}
 			assert.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -488,6 +495,7 @@ func TestEntitlementsChecker_VerifyResourceEntitlements_ReadByDefault_False(t *t
 		entitlements          entitlements.Entitlements
 		requirements          entitlements.Requirements
 		want                  bool
+		verb                  string
 	}{
 		{
 			name:                  "there is no identity entitlements by default",
@@ -533,11 +541,41 @@ func TestEntitlementsChecker_VerifyResourceEntitlements_ReadByDefault_False(t *t
 			},
 			want: true,
 		},
+		{
+			name:                  "custom identity verb - write",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements: entitlements.Entitlements{
+				"bearer": {"pages:foo:write"},
+			},
+			requirements: entitlements.Requirements{},
+			want:         true,
+			verb:         "write",
+		},
+		{
+			name:                  "custom identity verb - write (fails if only read)",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements: entitlements.Entitlements{
+				"bearer": {"pages:foo:read"},
+			},
+			requirements: entitlements.Requirements{},
+			want:         false,
+			verb:         "write",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ec := entitlements.NewEntitlementsChecker(tt.anonymousEntitlements, "", false)
-			got, err := ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			var got bool
+			var err error
+			if tt.verb != "" {
+				got, err = ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements, tt.verb)
+			} else {
+				got, err = ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			}
 			assert.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})

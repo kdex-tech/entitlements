@@ -166,18 +166,25 @@ func (ep entitlementPattern) matches(req entitlementPattern) bool {
 
 // CalculateResourceRequirements calculates the requirements for a resource instance.
 // It returns a copy of the requirements with the identity requirement added.
+// The optional verbs parameter allows specifying the verb for the identity requirement (defaults to "read").
 func (ec *EntitlementsChecker) CalculateResourceRequirements(
 	resource string,
 	resourceName string,
 	requirements Requirements,
+	verbs ...string,
 ) (Requirements, error) {
 	if resource == "" || resourceName == "" {
 		return nil, fmt.Errorf("resource and resourceName must not be empty")
 	}
 
+	verb := "read"
+	if len(verbs) > 0 && verbs[0] != "" {
+		verb = verbs[0]
+	}
+
 	// In order for pattern matching to work we need to create and add an identity requirement.
 	// Manual concatenation is faster than fmt.Sprintf
-	identity := resource + ":" + resourceName + ":read"
+	identity := resource + ":" + resourceName + ":" + verb
 
 	// We must return a new structure to avoid modifying the input, but we can do it efficiently.
 	newRequirements := make(Requirements, 0, len(requirements)+1)
@@ -199,21 +206,28 @@ func (ec *EntitlementsChecker) CalculateResourceRequirements(
 }
 
 // VerifyResourceEntitlements checks if the user's entitlements satisfy the security requirements for a resource instance.
+// The optional verbs parameter allows specifying the verb for the identity requirement (defaults to "read").
 func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 	resource string,
 	resourceName string,
 	entitlements Entitlements,
 	requirements Requirements,
+	verbs ...string,
 ) (bool, error) {
 	if resource == "" || resourceName == "" {
 		return false, fmt.Errorf("resource and resourceName must not be empty")
+	}
+
+	verb := "read"
+	if len(verbs) > 0 && verbs[0] != "" {
+		verb = verbs[0]
 	}
 
 	// 1. Pre-parse user entitlements once.
 	parsedEntitlements := ec.parseEntitlements(entitlements)
 
 	// 2. Check if user satisfies the resource identity requirement.
-	identity := resource + ":" + resourceName + ":read"
+	identity := resource + ":" + resourceName + ":" + verb
 	parsedIdentity := ec.parsePattern(identity)
 
 	hasIdentity := ec.grantReadyByDefault || ec.hasParsedEntitlement(parsedEntitlements[ec.defaultScheme], ec.defaultScheme, parsedIdentity)
