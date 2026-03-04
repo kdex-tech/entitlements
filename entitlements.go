@@ -154,7 +154,8 @@ func (ec *EntitlementsChecker) CalculateResourceRequirements(
 	}
 
 	// In order for pattern matching to work we need to create and add an identity requirement.
-	identity := fmt.Sprintf("%s:%s:read", resource, resourceName)
+	// Manual concatenation is faster than fmt.Sprintf
+	identity := resource + ":" + resourceName + ":read"
 
 	// We must return a new structure to avoid modifying the input, but we can do it efficiently.
 	newRequirements := make(Requirements, 0, len(requirements)+1)
@@ -190,7 +191,7 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 	parsedEntitlements := ec.parseEntitlements(entitlements)
 
 	// 2. Check if user satisfies the resource identity requirement.
-	identity := fmt.Sprintf("%s:%s:read", resource, resourceName)
+	identity := resource + ":" + resourceName + ":read"
 	parsedIdentity := parseEntitlementPattern(identity)
 
 	hasIdentity := ec.grantReadyByDefault || ec.hasParsedEntitlement(parsedEntitlements[ec.defaultScheme], ec.defaultScheme, parsedIdentity)
@@ -199,12 +200,12 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 	}
 
 	// 3. Verify the rest of the requirements.
-	// If there are no additional requirements, access is granted.
 	if len(requirements) == 0 {
 		return true, nil
 	}
 
-	return ec.verifyEntitlements(parsedEntitlements, requirements), nil
+	parsedRequirements := ec.parseRequirements(requirements)
+	return ec.verifyEntitlements(parsedEntitlements, parsedRequirements), nil
 }
 
 // VerifyEntitlements checks if the user's entitlements satisfy the security requirements.
@@ -217,7 +218,26 @@ func (ec *EntitlementsChecker) VerifyEntitlements(
 	}
 
 	parsedEntitlements := ec.parseEntitlements(entitlements)
-	return ec.verifyEntitlements(parsedEntitlements, requirements)
+	parsedRequirements := ec.parseRequirements(requirements)
+	return ec.verifyEntitlements(parsedEntitlements, parsedRequirements)
+}
+
+type parsedRequirements []map[string][]entitlementPattern
+
+func (ec *EntitlementsChecker) parseRequirements(requirements Requirements) parsedRequirements {
+	parsed := make(parsedRequirements, len(requirements))
+	for i, req := range requirements {
+		newReq := make(map[string][]entitlementPattern, len(req))
+		for scheme, list := range req {
+			patterns := make([]entitlementPattern, len(list))
+			for j, s := range list {
+				patterns[j] = parseEntitlementPattern(s)
+			}
+			newReq[scheme] = patterns
+		}
+		parsed[i] = newReq
+	}
+	return parsed
 }
 
 func (ec *EntitlementsChecker) parseEntitlements(entitlements Entitlements) map[string][]entitlementPattern {
@@ -234,12 +254,11 @@ func (ec *EntitlementsChecker) parseEntitlements(entitlements Entitlements) map[
 
 func (ec *EntitlementsChecker) verifyEntitlements(
 	entitlements map[string][]entitlementPattern,
-	requirements Requirements,
+	requirements parsedRequirements,
 ) (result bool) {
 	defer func() {
 		if ec.log != nil {
-			// We log the raw requirements for debugging
-			ec.log.V(2).Info("Verified entitlements", "requirements", requirements, "result", result)
+			ec.log.V(2).Info("Verified entitlements", "result", result)
 		}
 	}()
 
@@ -260,7 +279,7 @@ func (ec *EntitlementsChecker) WithLogger(log logr.Logger) *EntitlementsChecker 
 	return ec
 }
 
-func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string][]entitlementPattern, requirement map[string][]string) bool {
+func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string][]entitlementPattern, requirement map[string][]entitlementPattern) bool {
 	// Here requirements are AND'ed - user must match all
 	for scheme, requirementList := range requirement {
 		// A scheme is satisfied if it's present in entitlements OR it's the default scheme and we have anonymous entitlements.
@@ -278,9 +297,8 @@ func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string]
 }
 
 // satisfiesRequirement checks if user entitlements satisfy a single security requirement.
-func (ec *EntitlementsChecker) satisfiesRequirement(entitlements map[string][]entitlementPattern, scheme string, requirement []string) bool {
-	for _, curRequirement := range requirement {
-		parsedReq := parseEntitlementPattern(curRequirement)
+func (ec *EntitlementsChecker) satisfiesRequirement(entitlements map[string][]entitlementPattern, scheme string, requirement []entitlementPattern) bool {
+	for _, parsedReq := range requirement {
 		if !ec.hasParsedEntitlement(entitlements[scheme], scheme, parsedReq) {
 			return false
 		}
