@@ -3,6 +3,7 @@ package entitlements
 import (
 	"fmt"
 	"maps"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -22,6 +23,9 @@ const (
 //
 // Opaque form is intended to support JWT claims and other forms of requirements
 // like HTTP Headers.
+
+// resourceName should be URL-encoded (url.PathEscape) if it contains colons ':'
+// to prevent it from being misinterpreted by the pattern splitting logic.
 //
 // Examples:
 //   - pages:/foo:read - read access to page "foo" (explicit resource name)
@@ -102,7 +106,7 @@ func (ec *EntitlementsChecker) CalculateResourceRequirements(
 
 	// In order for pattern matching to work we need to create and add an identity requirement.
 	// Manual concatenation is faster than fmt.Sprintf
-	identity := resource + ":" + resourceName + ":" + verb
+	identity := resource + ":" + url.PathEscape(resourceName) + ":" + verb
 
 	// We must return a new structure to avoid modifying the input, but we can do it efficiently.
 	newRequirements := make(Requirements, 0, len(requirements)+1)
@@ -191,7 +195,7 @@ func (ec *EntitlementsChecker) VerifyResourceParsedEntitlements(
 	}
 
 	// Check if user satisfies the resource identity requirement.
-	identity := resource + ":" + resourceName + ":" + verb
+	identity := resource + ":" + url.PathEscape(resourceName) + ":" + verb
 	parsedIdentity := ec.parsePattern(identity)
 
 	hasIdentity := ec.grantReadyByDefault || ec.hasParsedEntitlement(parsedEntitlements.patterns[ec.defaultScheme], ec.defaultScheme, parsedIdentity)
