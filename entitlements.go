@@ -42,15 +42,18 @@ type EntitlementsChecker struct {
 	mu                  sync.RWMutex
 }
 
-type entitlementPattern struct {
-	raw          string
-	resource     string
-	resourceName string
-	verb         string
-	isPattern    bool
+type Entitlements map[string][]string
+
+// ParsedEntitlements represents a pre-parsed set of user entitlements.
+type ParsedEntitlements struct {
+	patterns map[string][]entitlementPattern
 }
 
-type Entitlements map[string][]string
+// ParsedRequirements represents a pre-parsed set of requirements.
+type ParsedRequirements struct {
+	patterns []map[string][]entitlementPattern
+}
+
 type Requirements []map[string][]string
 
 // NewEntitlementsChecker creates a new entitlements checker.
@@ -77,91 +80,6 @@ func NewEntitlementsChecker(
 	}
 
 	return ec
-}
-
-func (ec *EntitlementsChecker) parsePattern(s string) entitlementPattern {
-	// 1. Check the interning cache first
-	ec.mu.RLock()
-	p, ok := ec.cache[s]
-	ec.mu.RUnlock()
-	if ok {
-		return p
-	}
-
-	// 2. Optimization: If no colon is present, it's definitely an opaque form.
-	// This avoids the allocation of strings.Split for simple strings.
-	if !strings.Contains(s, ":") {
-		p = entitlementPattern{
-			raw:       s,
-			isPattern: false,
-		}
-	} else {
-		parts := strings.Split(s, ":")
-
-		// short syntax was used <resource>:<verb> which is equal to <resource>::<verb>, or <resource>:*:<verb>
-		if len(parts) == 2 {
-			p = entitlementPattern{
-				raw:          s,
-				resource:     parts[0],
-				resourceName: "",
-				verb:         parts[1],
-				isPattern:    true,
-			}
-		} else if len(parts) == 3 {
-			p = entitlementPattern{
-				raw:          s,
-				resource:     parts[0],
-				resourceName: parts[1],
-				verb:         parts[2],
-				isPattern:    true,
-			}
-		} else {
-			// Opaque form or invalid structure (e.g. too many colons)
-			p = entitlementPattern{
-				raw:       s,
-				isPattern: false,
-			}
-		}
-	}
-
-	// 3. Store in cache if there is room
-	ec.mu.Lock()
-	defer ec.mu.Unlock()
-	if len(ec.cache) < maxCacheSize {
-		ec.cache[s] = p
-	}
-	return p
-}
-
-func (ep entitlementPattern) matches(req entitlementPattern) bool {
-	// Exact match is always the fastest path
-	if ep.raw == req.raw {
-		return true
-	}
-
-	// If either is not a pattern (opaque), only exact match (above) works
-	if !ep.isPattern || !req.isPattern {
-		return false
-	}
-
-	// Resource type must match
-	if ep.resource != req.resource {
-		return false
-	}
-
-	// Verb must match (or entitlement provides "all")
-	if ep.verb != "all" && ep.verb != req.verb {
-		return false
-	}
-
-	// Check resource name with wildcard support
-	// Empty string or "*" in either side means all resources
-	if ep.resourceName == "" || ep.resourceName == "*" || req.resourceName == "" || req.resourceName == "*" {
-		return true
-	}
-
-	// Specific resource name must match
-	return ep.resourceName == req.resourceName
 }
 
 // CalculateResourceRequirements calculates the requirements for a resource instance.
@@ -205,6 +123,36 @@ func (ec *EntitlementsChecker) CalculateResourceRequirements(
 	return newRequirements, nil
 }
 
+// ParseEntitlements pre-parses entitlements for high-performance verification.
+func (ec *EntitlementsChecker) ParseEntitlements(entitlements Entitlements) ParsedEntitlements {
+	parsed := make(map[string][]entitlementPattern, len(entitlements))
+	for scheme, list := range entitlements {
+		patterns := make([]entitlementPattern, len(list))
+		for i, s := range list {
+			patterns[i] = ec.parsePattern(s)
+		}
+		parsed[scheme] = patterns
+	}
+	return ParsedEntitlements{patterns: parsed}
+}
+
+// ParseRequirements pre-parses requirements for high-performance verification.
+func (ec *EntitlementsChecker) ParseRequirements(requirements Requirements) ParsedRequirements {
+	parsed := make([]map[string][]entitlementPattern, len(requirements))
+	for i, req := range requirements {
+		newReq := make(map[string][]entitlementPattern, len(req))
+		for scheme, list := range req {
+			patterns := make([]entitlementPattern, len(list))
+			for j, s := range list {
+				patterns[j] = ec.parsePattern(s)
+			}
+			newReq[scheme] = patterns
+		}
+		parsed[i] = newReq
+	}
+	return ParsedRequirements{patterns: parsed}
+}
+
 // VerifyResourceEntitlements checks if the user's entitlements satisfy the security requirements for a resource instance.
 // The optional verbs parameter allows specifying the verb for the identity requirement (defaults to "read").
 func (ec *EntitlementsChecker) VerifyResourceEntitlements(
@@ -220,7 +168,7 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 
 	parsedEntitlements := ec.ParseEntitlements(entitlements)
 	parsedRequirements := ec.ParseRequirements(requirements)
-	
+
 	return ec.VerifyResourceParsedEntitlements(resource, resourceName, parsedEntitlements, parsedRequirements, verbs...)
 }
 
@@ -301,49 +249,84 @@ func (ec *EntitlementsChecker) VerifyParsedEntitlements(
 	return
 }
 
-// ParsedRequirements represents a pre-parsed set of requirements.
-type ParsedRequirements struct {
-	patterns []map[string][]entitlementPattern
-}
-
-// ParseRequirements pre-parses requirements for high-performance verification.
-func (ec *EntitlementsChecker) ParseRequirements(requirements Requirements) ParsedRequirements {
-	parsed := make([]map[string][]entitlementPattern, len(requirements))
-	for i, req := range requirements {
-		newReq := make(map[string][]entitlementPattern, len(req))
-		for scheme, list := range req {
-			patterns := make([]entitlementPattern, len(list))
-			for j, s := range list {
-				patterns[j] = ec.parsePattern(s)
-			}
-			newReq[scheme] = patterns
-		}
-		parsed[i] = newReq
-	}
-	return ParsedRequirements{patterns: parsed}
-}
-
-// ParsedEntitlements represents a pre-parsed set of user entitlements.
-type ParsedEntitlements struct {
-	patterns map[string][]entitlementPattern
-}
-
-// ParseEntitlements pre-parses entitlements for high-performance verification.
-func (ec *EntitlementsChecker) ParseEntitlements(entitlements Entitlements) ParsedEntitlements {
-	parsed := make(map[string][]entitlementPattern, len(entitlements))
-	for scheme, list := range entitlements {
-		patterns := make([]entitlementPattern, len(list))
-		for i, s := range list {
-			patterns[i] = ec.parsePattern(s)
-		}
-		parsed[scheme] = patterns
-	}
-	return ParsedEntitlements{patterns: parsed}
-}
-
 func (ec *EntitlementsChecker) WithLogger(log logr.Logger) *EntitlementsChecker {
 	ec.log = &log
 	return ec
+}
+
+// hasParsedEntitlement checks if the user has a specific entitlement using pre-parsed patterns.
+func (ec *EntitlementsChecker) hasParsedEntitlement(entitlementList []entitlementPattern, scheme string, requirement entitlementPattern) bool {
+	// Check user-provided entitlements for this scheme
+	for _, entitlement := range entitlementList {
+		if entitlement.matches(requirement) {
+			return true
+		}
+	}
+
+	// Check anonymous entitlements if we are checking the default scheme
+	if scheme == ec.defaultScheme {
+		for _, pattern := range ec.anonymousPatterns {
+			if pattern.matches(requirement) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (ec *EntitlementsChecker) parsePattern(s string) entitlementPattern {
+	// 1. Check the interning cache first
+	ec.mu.RLock()
+	p, ok := ec.cache[s]
+	ec.mu.RUnlock()
+	if ok {
+		return p
+	}
+
+	// 2. Optimization: If no colon is present, it's definitely an opaque form.
+	// This avoids the allocation of strings.Split for simple strings.
+	if !strings.Contains(s, ":") {
+		p = entitlementPattern{
+			raw:       s,
+			isPattern: false,
+		}
+	} else {
+		parts := strings.Split(s, ":")
+
+		// short syntax was used <resource>:<verb> which is equal to <resource>::<verb>, or <resource>:*:<verb>
+		if len(parts) == 2 {
+			p = entitlementPattern{
+				raw:          s,
+				resource:     parts[0],
+				resourceName: "",
+				verb:         parts[1],
+				isPattern:    true,
+			}
+		} else if len(parts) == 3 {
+			p = entitlementPattern{
+				raw:          s,
+				resource:     parts[0],
+				resourceName: parts[1],
+				verb:         parts[2],
+				isPattern:    true,
+			}
+		} else {
+			// Opaque form or invalid structure (e.g. too many colons)
+			p = entitlementPattern{
+				raw:       s,
+				isPattern: false,
+			}
+		}
+	}
+
+	// 3. Store in cache if there is room
+	ec.mu.Lock()
+	defer ec.mu.Unlock()
+	if len(ec.cache) < maxCacheSize {
+		ec.cache[s] = p
+	}
+	return p
 }
 
 func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string][]entitlementPattern, requirement map[string][]entitlementPattern) bool {
@@ -374,23 +357,41 @@ func (ec *EntitlementsChecker) satisfiesRequirement(entitlements map[string][]en
 	return true
 }
 
-// hasParsedEntitlement checks if the user has a specific entitlement using pre-parsed patterns.
-func (ec *EntitlementsChecker) hasParsedEntitlement(entitlementList []entitlementPattern, scheme string, requirement entitlementPattern) bool {
-	// Check user-provided entitlements for this scheme
-	for _, entitlement := range entitlementList {
-		if entitlement.matches(requirement) {
-			return true
-		}
+type entitlementPattern struct {
+	raw          string
+	resource     string
+	resourceName string
+	verb         string
+	isPattern    bool
+}
+
+func (ep entitlementPattern) matches(req entitlementPattern) bool {
+	// Exact match is always the fastest path
+	if ep.raw == req.raw {
+		return true
 	}
 
-	// Check anonymous entitlements if we are checking the default scheme
-	if scheme == ec.defaultScheme {
-		for _, pattern := range ec.anonymousPatterns {
-			if pattern.matches(requirement) {
-				return true
-			}
-		}
+	// If either is not a pattern (opaque), only exact match (above) works
+	if !ep.isPattern || !req.isPattern {
+		return false
 	}
 
-	return false
+	// Resource type must match
+	if ep.resource != req.resource {
+		return false
+	}
+
+	// Verb must match (or entitlement provides "all")
+	if ep.verb != "all" && ep.verb != req.verb {
+		return false
+	}
+
+	// Check resource name with wildcard support
+	// Empty string or "*" in either side means all resources
+	if ep.resourceName == "" || ep.resourceName == "*" || req.resourceName == "" || req.resourceName == "*" {
+		return true
+	}
+
+	// Specific resource name must match
+	return ep.resourceName == req.resourceName
 }
