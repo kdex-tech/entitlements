@@ -17,13 +17,13 @@
     - [x] Run `make test` from the root to ensure the Go tests still pass in their new location.
 - [x] Task: Conductor - User Manual Verification 'Project Restructuring' (Protocol in workflow.md)
 
-## Phase 3: Rust Initialization
+## Phase 3: Rust Initialization [checkpoint: 8ffa8b2]
 - [x] Task: Initialize Rust project.
     - [x] Create `rust/` directory.
     - [x] Run `cargo init --lib` within `rust/`.
 - [x] Task: Update top-level Makefile for Rust.
     - [x] Add/update `test`, `coverage`, and `lint` targets in the top-level `Makefile` to delegate to the `rust/` directory.
-- [ ] Task: Conductor - User Manual Verification 'Rust Initialization' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Rust Initialization' (Protocol in workflow.md)
 
 ## Phase 4: Python Initialization
 - [ ] Task: Initialize Python project.
