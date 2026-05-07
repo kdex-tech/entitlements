@@ -25,10 +25,10 @@
     - [x] Add/update `test`, `coverage`, and `lint` targets in the top-level `Makefile` to delegate to the `rust/` directory.
 - [x] Task: Conductor - User Manual Verification 'Rust Initialization' (Protocol in workflow.md)
 
-## Phase 4: Python Initialization
+## Phase 4: Python Initialization [checkpoint: 9a82755]
 - [x] Task: Initialize Python project.
     - [x] Create `python/` directory.
     - [x] Set up Python environment (`pyproject.toml` or similar, `pytest`, etc.).
 - [x] Task: Update top-level Makefile for Python.
     - [x] Add/update `test`, `coverage`, and `lint` targets in the top-level `Makefile` to delegate to the `python/` directory.
-- [ ] Task: Conductor - User Manual Verification 'Python Initialization' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Python Initialization' (Protocol in workflow.md)
