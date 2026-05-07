@@ -71,7 +71,7 @@ impl Pattern {
                 }
 
                 // Name must match exactly, or either is a wildcard
-                if en != rn && en != "*" && en != "" && rn != "*" && rn != "" {
+                if en != rn && en != "*" && !en.is_empty() && rn != "*" && !rn.is_empty() {
                     return false;
                 }
 
@@ -108,7 +108,7 @@ impl EntitlementsChecker {
         if !self.anonymous_entitlements.is_empty() {
             let entry = merged
                 .entry(self.default_scheme.clone())
-                .or_insert_with(Vec::new);
+                .or_default();
             for anon in &self.anonymous_entitlements {
                 if !entry.contains(anon) {
                     entry.push(anon.clone());
@@ -184,7 +184,7 @@ impl EntitlementsChecker {
             let mut new_set = set.clone();
             new_set
                 .entry(self.default_scheme.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(identity_req.clone());
             combined_requirements.push(new_set);
         }
