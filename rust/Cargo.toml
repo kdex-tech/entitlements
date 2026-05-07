@@ -2,6 +2,9 @@
 name = "kdex-entitlements"
 version = "0.1.0"
 edition = "2024"
+description = "A simple, robust entitlements checking library"
+license = "Apache-2.0"
+repository = "https://github.com/kdex-tech/entitlements"
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }

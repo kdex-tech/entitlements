@@ -119,6 +119,8 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          sed -i "s/^version = .*/version = \"$VERSION\"/" Cargo.toml
           if [ -n "$CARGO_REGISTRY_TOKEN" ]; then
             cargo publish
           else
@@ -133,9 +135,12 @@ jobs:
       - name: Build and Publish Python Package
         working-directory: ./python
         env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ github.ref_name }}
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
+          # Strip 'v' prefix if present for python package version
+          export SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION#v}
           python -m pip install --upgrade pip build twine
           python -m build
           if [ -n "$TWINE_PASSWORD" ]; then
