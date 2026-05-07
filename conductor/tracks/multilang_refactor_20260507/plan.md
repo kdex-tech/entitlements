@@ -7,14 +7,14 @@
 - [x] Task: Conductor - User Manual Verification 'Preparation & Specification' (Protocol in workflow.md)
 
 ## Phase 2: Project Restructuring
-- [ ] Task: Move Go implementation to a dedicated directory.
-    - [ ] Create `go/` directory.
-    - [ ] Move `entitlements.go`, `entitlements_test.go`, `go.mod`, and `go.sum` into `go/`.
-    - [ ] Update `go.mod` if necessary.
-- [ ] Task: Update top-level Makefile for Go.
-    - [ ] Modify the existing `Makefile` to delegate `test`, `coverage`, and `lint` targets to the `go/` directory.
-- [ ] Task: Verify Go Restructuring.
-    - [ ] Run `make test` from the root to ensure the Go tests still pass in their new location.
+- [x] Task: Move Go implementation to a dedicated directory.
+    - [x] Create `go/` directory.
+    - [x] Move `entitlements.go`, `entitlements_test.go`, `go.mod`, and `go.sum` into `go/`.
+    - [x] Update `go.mod` if necessary.
+- [x] Task: Update top-level Makefile for Go.
+    - [x] Modify the existing `Makefile` to delegate `test`, `coverage`, and `lint` targets to the `go/` directory.
+- [x] Task: Verify Go Restructuring.
+    - [x] Run `make test` from the root to ensure the Go tests still pass in their new location.
 - [ ] Task: Conductor - User Manual Verification 'Project Restructuring' (Protocol in workflow.md)
 
 ## Phase 3: Rust Initialization

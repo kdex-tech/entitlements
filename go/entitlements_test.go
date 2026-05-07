@@ -1,0 +1,726 @@
+package entitlements_test
+
+import (
+	"testing"
+
+	"github.com/kdex-tech/entitlements"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestEntitlementsChecker_VerifyEntitlements(t *testing.T) {
+	tests := []struct {
+		name                  string
+		anonymousEntitlements []string
+		entitlements          entitlements.Entitlements
+		requirements          entitlements.Requirements
+		want                  bool
+	}{
+		{
+			name:                  "none",
+			anonymousEntitlements: []string{},
+			entitlements:          map[string][]string{},
+			requirements:          entitlements.Requirements{},
+			want:                  true,
+		},
+		{
+			name:                  "opaque - no entitlements",
+			anonymousEntitlements: []string{},
+			entitlements:          map[string][]string{},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "opaque - entitlements match requirement",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "opaque - entitlements does not match requirement",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"books"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "opaque - does not match wildcard specific verb",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"books"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"books:read"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "opaque - does not match wildcard all verb",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"books"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"books:all"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "opaque - does not match explicit wildcard all verb",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"books"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"books:*:all"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "opaque - wildcard all verb entitlement does not match opaque requirement",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"books:all"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"books"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "short - entitlements match requirement",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:read"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "short - entitlements do not match requirement with multiple verbs",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:read", "pages:write"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "short - entitlements do not match requirement with multiple verbs",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:read", "pages:write"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:read", "pages:write"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "short - entitlement does not match requirement wrong verb",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:write"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "short - wildcard entitlement does not match opaque requirement",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:all"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "short - wildcard entitlement matches wildcard requirement",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:all"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:all"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "short - wildcard entitlement matches short requirement",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:all"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:read"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "long - long entitlement matches short requirement",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:read"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "long - long entitlement matches long requirement",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:/foo:read"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "long - long entitlement does not match short requirement wrong verb",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:write"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "long - long entitlement matches short requirement by verb",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:read"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "long - long entitlement does not match long requirement wrong resourceName",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:/bar:read"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "long - long entitlement does not match long requirement wrong resource",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"pages:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"books:/foo:read"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "OR - entitlement does not match by resource",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"users:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"books:/foo:read"}},
+				{"bearer": {"pages:/bar:read"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "OR - entitlement does not match by verb",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"users:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"users:/foo:write"}},
+				{"bearer": {"users:/foo:delete"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "OR - entitlement does not match by resourceName",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"users:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"users:/bar:read"}},
+				{"bearer": {"users:/baz:read"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "OR - entitlement matches one of the requirements",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"users:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"users:/bar:read"}},
+				{"bearer": {"users:/foo:read"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "AND - entitlement does not match all of the requirements",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"users:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"bearer": {"users:/bar:read"},
+					"other":  {"users:/foo:read"},
+				},
+			},
+			want: false,
+		},
+		{
+			name:                  "AND - entitlement matches all of the requirements",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"users:/bar:read"},
+				"other":  {"users:/foo:read"},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"bearer": {"users:/bar:read"},
+					"other":  {"users:/foo:read"},
+				},
+			},
+			want: true,
+		},
+		{
+			name:                  "AND - entitlement does not match scheme of requirement",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {"users:/bar:read"},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"other": {"users:/bar:read"},
+				},
+			},
+			want: false,
+		},
+		{
+			name:                  "AND - match only scheme",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"bearer": {},
+				},
+			},
+			want: true,
+		},
+		{
+			name:                  "AND - does not match all schemes",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"bearer": {},
+					"oauth2": {},
+				},
+			},
+			want: false,
+		},
+		{
+			name:                  "AND - matches all schemes",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {},
+				"oauth2": {},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"bearer": {},
+					"oauth2": {},
+				},
+			},
+			want: true,
+		},
+		{
+			name:                  "OR - matches one of the schemes",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"bearer": {},
+				},
+				{
+					"oauth2": {},
+				},
+			},
+			want: true,
+		},
+		{
+			name:                  "OR - matches none of the schemes",
+			anonymousEntitlements: []string{},
+			entitlements: map[string][]string{
+				"bearer": {},
+			},
+			requirements: entitlements.Requirements{
+				{
+					"foo": {},
+				},
+				{
+					"oauth2": {},
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ec := entitlements.NewEntitlementsChecker(tt.anonymousEntitlements, "bearer", true)
+			got := ec.VerifyEntitlements(tt.entitlements, tt.requirements)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestEntitlementsChecker_VerifyResourceEntitlements_ReadByDefault_True(t *testing.T) {
+	tests := []struct {
+		name                  string
+		anonymousEntitlements []string
+		resource              string
+		resourceName          string
+		entitlements          entitlements.Entitlements
+		requirements          entitlements.Requirements
+		want                  bool
+		verb                  string
+	}{
+		{
+			name:                  "identity entitlements are enough",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements:          entitlements.Entitlements{},
+			requirements:          entitlements.Requirements{},
+			want:                  true,
+		},
+		{
+			name:                  "identity entitlements are enough even with other entitlements",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements: entitlements.Entitlements{
+				"bearer": {"pages:write"},
+			},
+			requirements: entitlements.Requirements{},
+			want:         true,
+		},
+		{
+			name:                  "requirements are raised above identity entitlements",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements:          entitlements.Entitlements{},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:write"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "requirements are raised above identity entitlements and met by entitlements",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements: entitlements.Entitlements{
+				"bearer": {"pages:write"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:write"}},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ec := entitlements.NewEntitlementsChecker(tt.anonymousEntitlements, "bearer", true)
+			var got bool
+			var err error
+			if tt.verb != "" {
+				got, err = ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements, tt.verb)
+			} else {
+				got, err = ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestEntitlementsChecker_VerifyResourceEntitlements_ReadByDefault_False(t *testing.T) {
+	tests := []struct {
+		name                  string
+		anonymousEntitlements []string
+		resource              string
+		resourceName          string
+		entitlements          entitlements.Entitlements
+		requirements          entitlements.Requirements
+		want                  bool
+		verb                  string
+	}{
+		{
+			name:                  "there is no identity entitlements by default",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements:          entitlements.Entitlements{},
+			requirements:          entitlements.Requirements{},
+			want:                  false,
+		},
+		{
+			name:                  "need read entitlements",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements: entitlements.Entitlements{
+				"bearer": {"pages:read"},
+			},
+			requirements: entitlements.Requirements{},
+			want:         true,
+		},
+		{
+			name:                  "require bearer write but not entitled",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements:          entitlements.Entitlements{},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:write"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "require bearer write and entitled",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements: entitlements.Entitlements{
+				"bearer": {"pages:write", "pages:read"},
+			},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:write"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "custom identity verb - write",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements: entitlements.Entitlements{
+				"bearer": {"pages:foo:write"},
+			},
+			requirements: entitlements.Requirements{},
+			want:         true,
+			verb:         "write",
+		},
+		{
+			name:                  "custom identity verb - write (fails if only read)",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "foo",
+			entitlements: entitlements.Entitlements{
+				"bearer": {"pages:foo:read"},
+			},
+			requirements: entitlements.Requirements{},
+			want:         false,
+			verb:         "write",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ec := entitlements.NewEntitlementsChecker(tt.anonymousEntitlements, "", false)
+			var got bool
+			var err error
+			if tt.verb != "" {
+				got, err = ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements, tt.verb)
+			} else {
+				got, err = ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestEntitlementsChecker_CalculateResourceRequirements(t *testing.T) {
+	tests := []struct {
+		name          string
+		defaultScheme string
+		resource      string
+		resourceName  string
+		requirements  entitlements.Requirements
+		want          entitlements.Requirements
+		wantErr       string
+	}{
+		{
+			name:          "no resource",
+			defaultScheme: "bearer",
+			resource:      "",
+			resourceName:  "foo",
+			requirements:  entitlements.Requirements{},
+			wantErr:       "resource and resourceName must not be empty",
+		},
+		{
+			name:          "no resource name",
+			defaultScheme: "bearer",
+			resource:      "pages",
+			resourceName:  "",
+			requirements:  entitlements.Requirements{},
+			wantErr:       "resource and resourceName must not be empty",
+		},
+		{
+			name:          "no requirements",
+			defaultScheme: "bearer",
+			resource:      "pages",
+			resourceName:  "foo",
+			requirements:  entitlements.Requirements{},
+			want:          entitlements.Requirements{{"bearer": {"pages:foo:read"}}},
+		},
+		{
+			name:          "requirements",
+			defaultScheme: "bearer",
+			resource:      "pages",
+			resourceName:  "foo",
+			requirements:  entitlements.Requirements{{"bearer": {"pages:write"}}},
+			want:          entitlements.Requirements{{"bearer": {"pages:write", "pages:foo:read"}}},
+		},
+		{
+			name:          "requirements with different scheme",
+			defaultScheme: "bar",
+			resource:      "pages",
+			resourceName:  "foo",
+			requirements:  entitlements.Requirements{{"bar": {"pages:write"}}},
+			want:          entitlements.Requirements{{"bar": {"pages:write", "pages:foo:read"}}},
+		},
+		{
+			name:          "requirements with different schemes",
+			defaultScheme: "bar",
+			resource:      "pages",
+			resourceName:  "foo",
+			requirements:  entitlements.Requirements{{"bearer": {"pages:write"}}},
+			want:          entitlements.Requirements{{"bar": {"pages:foo:read"}, "bearer": {"pages:write"}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ec := entitlements.NewEntitlementsChecker([]string{}, tt.defaultScheme, false)
+			got, gotErr := ec.CalculateResourceRequirements(tt.resource, tt.resourceName, tt.requirements)
+			if tt.wantErr != "" {
+				assert.Error(t, gotErr)
+				assert.Contains(t, gotErr.Error(), tt.wantErr)
+				return
+			}
+			assert.NoError(t, gotErr)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func BenchmarkVerifyEntitlements_Simple(b *testing.B) {
+	ec := entitlements.NewEntitlementsChecker(nil, "bearer", false)
+	userEntitlements := entitlements.Entitlements{
+		"bearer": {"pages:read"},
+	}
+	reqs := entitlements.Requirements{
+		{"bearer": {"pages:read"}},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ec.VerifyEntitlements(userEntitlements, reqs)
+	}
+}
+
+func BenchmarkVerifyEntitlements_Complex(b *testing.B) {
+	ec := entitlements.NewEntitlementsChecker([]string{"public:read"}, "bearer", false)
+	userEntitlements := entitlements.Entitlements{
+		"bearer": {"pages:read", "books:write", "admin:all"},
+		"oauth2": {"scope1", "scope2"},
+	}
+	reqs := entitlements.Requirements{
+		{"bearer": {"pages:read", "books:write"}},
+		{"oauth2": {"scope2"}},
+		{"bearer": {"admin:read"}},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ec.VerifyEntitlements(userEntitlements, reqs)
+	}
+}
+
+func BenchmarkVerifyResourceEntitlements(b *testing.B) {
+	ec := entitlements.NewEntitlementsChecker(nil, "bearer", false)
+	userEntitlements := entitlements.Entitlements{
+		"bearer": {"pages:foo:read", "other:all"},
+	}
+	reqs := entitlements.Requirements{
+		{"bearer": {"other:read"}},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = ec.VerifyResourceEntitlements("pages", "foo", userEntitlements, reqs)
+	}
+}
+
+func BenchmarkVerifyParsedEntitlements_Complex(b *testing.B) {
+	ec := entitlements.NewEntitlementsChecker([]string{"public:read"}, "bearer", false)
+	userEntitlements := entitlements.Entitlements{
+		"bearer": {"pages:read", "books:write", "admin:all"},
+		"oauth2": {"scope1", "scope2"},
+	}
+	reqs := entitlements.Requirements{
+		{"bearer": {"pages:read", "books:write"}},
+		{"oauth2": {"scope2"}},
+		{"bearer": {"admin:read"}},
+	}
+
+	parsedEntitlements := ec.ParseEntitlements(userEntitlements)
+	parsedReqs := ec.ParseRequirements(reqs)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ec.VerifyParsedEntitlements(parsedEntitlements, parsedReqs)
+	}
+}
