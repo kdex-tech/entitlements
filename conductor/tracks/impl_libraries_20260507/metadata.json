@@ -1,0 +1,8 @@
+{
+  "track_id": "impl_libraries_20260507",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-05-07T00:00:00Z",
+  "updated_at": "2026-05-07T00:00:00Z",
+  "description": "Implement the rust and python libaries ensuring 100% compatibility and ideally following the same goals precisely using @SPEC.md document in the root (and the go implementation as reference) to drive the parallel implementations."
+}
