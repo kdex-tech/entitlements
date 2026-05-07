@@ -130,7 +130,7 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           sed -i "s/^version = .*/version = \"$VERSION\"/" Cargo.toml
           if [ -n "$CARGO_REGISTRY_TOKEN" ]; then
-            cargo publish
+            cargo publish --allow-dirty
           else
             echo "CARGO_REGISTRY_TOKEN is not set. Skipping crates.io publish."
           fi
