@@ -3,9 +3,9 @@
 ## Phase 1: Analysis and Coverage Check
 - [x] Task: Run existing tests.
     - [x] Run `go test ./...` to ensure all existing tests pass.
-- [ ] Task: Check current test coverage.
-    - [ ] Run `go test -coverprofile=coverage.out ./...`
-    - [ ] Run `go tool cover -func=coverage.out` to view the current coverage percentage.
+- [x] Task: Check current test coverage.
+    - [x] Run `go test -coverprofile=coverage.out ./...`
+    - [x] Run `go tool cover -func=coverage.out` to view the current coverage percentage.
 - [ ] Task: Identify coverage gaps.
     - [ ] If coverage is below 80%, use `go tool cover -html=coverage.out` (or similar) to identify untested code paths in `entitlements.go`.
 - [ ] Task: Conductor - User Manual Verification 'Analysis and Coverage Check' (Protocol in workflow.md)
