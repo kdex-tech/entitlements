@@ -1,14 +1,21 @@
+VENV = .venv
+VENV_BIN = $(VENV)/bin
+
 .PHONY: all
 all: test
 
 .PHONY: test
-test: ## Run Python tests.
-	pytest
+test: $(VENV) ## Run Python tests.
+	$(VENV_BIN)/pytest
 
 .PHONY: coverage
-coverage: ## Run Python tests with coverage.
-	pytest --cov=entitlements --cov-report=term-missing
+coverage: $(VENV) ## Run Python tests with coverage.
+	$(VENV_BIN)/pytest --cov=entitlements --cov-report=term-missing
 
 .PHONY: lint
-lint: ## Run Python linter (ruff).
-	ruff check .
+lint: $(VENV) ## Run Python linter (ruff).
+	$(VENV_BIN)/ruff check .
+
+$(VENV):
+	python3 -m venv $(VENV)
+	$(VENV_BIN)/pip install pytest pytest-cov
