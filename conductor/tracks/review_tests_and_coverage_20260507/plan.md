@@ -10,9 +10,9 @@
     - [x] If coverage is below 80%, use `go tool cover -html=coverage.out` (or similar) to identify untested code paths in `entitlements.go`.
 - [x] Task: Conductor - User Manual Verification 'Analysis and Coverage Check' (Protocol in workflow.md)
 
-## Phase 2: Implement Additional Tests
-- [ ] Task: Write tests for uncovered code paths (if necessary).
-    - [ ] Update `entitlements_test.go` or create new test files using `testify` to cover the identified gaps.
-- [ ] Task: Verify new coverage.
-    - [ ] Re-run coverage checks to ensure >80% coverage is achieved.
-- [ ] Task: Conductor - User Manual Verification 'Implement Additional Tests' (Protocol in workflow.md)
+## Phase 2: Implement Additional Tests [checkpoint: faf4bbe]
+- [x] Task: Write tests for uncovered code paths (if necessary).
+    - [x] Update `entitlements_test.go` or create new test files using `testify` to cover the identified gaps.
+- [x] Task: Verify new coverage.
+    - [x] Re-run coverage checks to ensure >80% coverage is achieved.
+- [x] Task: Conductor - User Manual Verification 'Implement Additional Tests' (Protocol in workflow.md)
