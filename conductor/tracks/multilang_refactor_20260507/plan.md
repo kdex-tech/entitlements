@@ -26,9 +26,9 @@
 - [x] Task: Conductor - User Manual Verification 'Rust Initialization' (Protocol in workflow.md)
 
 ## Phase 4: Python Initialization
-- [ ] Task: Initialize Python project.
-    - [ ] Create `python/` directory.
-    - [ ] Set up Python environment (`pyproject.toml` or similar, `pytest`, etc.).
-- [ ] Task: Update top-level Makefile for Python.
-    - [ ] Add/update `test`, `coverage`, and `lint` targets in the top-level `Makefile` to delegate to the `python/` directory.
+- [x] Task: Initialize Python project.
+    - [x] Create `python/` directory.
+    - [x] Set up Python environment (`pyproject.toml` or similar, `pytest`, etc.).
+- [x] Task: Update top-level Makefile for Python.
+    - [x] Add/update `test`, `coverage`, and `lint` targets in the top-level `Makefile` to delegate to the `python/` directory.
 - [ ] Task: Conductor - User Manual Verification 'Python Initialization' (Protocol in workflow.md)
