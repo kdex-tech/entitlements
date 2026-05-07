@@ -34,3 +34,21 @@ go.work.sum
 
 bin/
 tmp/
+
+# Rust
+target/
+
+# Python
+__pycache__/
+.venv/
+.pytest_cache/
+*.pyc
+.ipynb_checkpoints/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
