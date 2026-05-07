@@ -1,8 +1,8 @@
 # Implementation Plan: Implement Rust and Python Libraries
 
 ## Phase 1: Rust Implementation
-- [ ] Task: Setup Rust project structure and dependencies.
-    - [ ] Review `rust/Cargo.toml` and setup standard module structure.
+- [x] Task: Setup Rust project structure and dependencies.
+    - [x] Review `rust/Cargo.toml` and setup standard module structure.
 - [ ] Task: Implement Rust entitlements checker logic.
     - [ ] Create core structs for entitlements and requirements in `rust/src/lib.rs`.
     - [ ] Implement parsing and matching logic according to `SPEC.md`.
