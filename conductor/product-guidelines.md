@@ -6,6 +6,6 @@
 3. **Performance:** The library should add minimal latency to applications using it.
 
 ## Coding Standards
-*   Follow standard Go idioms and formatting.
+*   Follow language-specific idioms and formatting (e.g., standard Go, Rust, and Python conventions).
 *   Ensure comprehensive test coverage.
 *   Document all exported functions clearly.
