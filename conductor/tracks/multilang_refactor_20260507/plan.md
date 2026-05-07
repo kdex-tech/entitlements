@@ -1,10 +1,10 @@
 # Implementation Plan: Multi-Language Restructuring
 
-## Phase 1: Preparation & Specification
+## Phase 1: Preparation & Specification [checkpoint: 4545e73]
 - [x] Task: Create Central Specification Document.
     - [x] Analyze the existing Go implementation (`entitlements.go`, `entitlements_test.go`).
     - [x] Create `SPEC.md` in the project root detailing the behavioral requirements.
-- [ ] Task: Conductor - User Manual Verification 'Preparation & Specification' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Preparation & Specification' (Protocol in workflow.md)
 
 ## Phase 2: Project Restructuring
 - [ ] Task: Move Go implementation to a dedicated directory.
