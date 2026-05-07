@@ -1,16 +1,16 @@
 # Implementation Plan: Implement Rust and Python Libraries
 
-## Phase 1: Rust Implementation
-- [x] Task: Setup Rust project structure and dependencies.
+## Phase 1: Rust Implementation [checkpoint: e5c5b64]
+- [x] Task: Setup Rust project structure and dependencies. 2125eb0
     - [x] Review `rust/Cargo.toml` and setup standard module structure.
-- [ ] Task: Implement Rust entitlements checker logic.
-    - [ ] Create core structs for entitlements and requirements in `rust/src/lib.rs`.
-    - [ ] Implement parsing and matching logic according to `SPEC.md`.
-- [ ] Task: Write unit tests for Rust implementation.
-    - [ ] Add tests in `rust/src/lib.rs` or `rust/tests/` to cover all scenarios defined in `SPEC.md`.
-- [ ] Task: Verify Rust test coverage.
-    - [ ] Run coverage tools and ensure test coverage exceeds 80%.
-- [ ] Task: Conductor - User Manual Verification 'Rust Implementation' (Protocol in workflow.md)
+- [x] Task: Implement Rust entitlements checker logic. 650bc8e
+    - [x] Create core structs for entitlements and requirements in `rust/src/lib.rs`.
+    - [x] Implement parsing and matching logic according to `SPEC.md`.
+- [x] Task: Write unit tests for Rust implementation. 650bc8e
+    - [x] Add tests in `rust/src/lib.rs` or `rust/tests/` to cover all scenarios defined in `SPEC.md`.
+- [x] Task: Verify Rust test coverage.
+    - [x] Run coverage tools and ensure test coverage exceeds 80%.
+- [x] Task: Conductor - User Manual Verification 'Rust Implementation' (Protocol in workflow.md)
 
 ## Phase 2: Python Implementation
 - [ ] Task: Setup Python project structure and dependencies.
