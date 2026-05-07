@@ -18,11 +18,11 @@
 - [x] Task: Conductor - User Manual Verification 'Project Restructuring' (Protocol in workflow.md)
 
 ## Phase 3: Rust Initialization
-- [ ] Task: Initialize Rust project.
-    - [ ] Create `rust/` directory.
-    - [ ] Run `cargo init --lib` within `rust/`.
-- [ ] Task: Update top-level Makefile for Rust.
-    - [ ] Add/update `test`, `coverage`, and `lint` targets in the top-level `Makefile` to delegate to the `rust/` directory.
+- [x] Task: Initialize Rust project.
+    - [x] Create `rust/` directory.
+    - [x] Run `cargo init --lib` within `rust/`.
+- [x] Task: Update top-level Makefile for Rust.
+    - [x] Add/update `test`, `coverage`, and `lint` targets in the top-level `Makefile` to delegate to the `rust/` directory.
 - [ ] Task: Conductor - User Manual Verification 'Rust Initialization' (Protocol in workflow.md)
 
 ## Phase 4: Python Initialization

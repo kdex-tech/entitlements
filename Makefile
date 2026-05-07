@@ -30,11 +30,27 @@ lint-go: ## Run Go linter.
 test-rust: ## Run Rust tests.
 	@if [ -d rust ]; then $(MAKE) -C rust test; else echo "Rust implementation not found"; fi
 
+.PHONY: coverage-rust
+coverage-rust: ## Generate Rust test coverage report.
+	@if [ -d rust ]; then $(MAKE) -C rust coverage; else echo "Rust implementation not found"; fi
+
+.PHONY: lint-rust
+lint-rust: ## Run Rust linter.
+	@if [ -d rust ]; then $(MAKE) -C rust lint; else echo "Rust implementation not found"; fi
+
 ##@ Python
 
 .PHONY: test-python
 test-python: ## Run Python tests.
 	@if [ -d python ]; then $(MAKE) -C python test; else echo "Python implementation not found"; fi
+
+.PHONY: coverage-python
+coverage-python: ## Generate Python test coverage report.
+	@if [ -d python ]; then $(MAKE) -C python coverage; else echo "Python implementation not found"; fi
+
+.PHONY: lint-python
+lint-python: ## Run Python linter.
+	@if [ -d python ]; then $(MAKE) -C python lint; else echo "Python implementation not found"; fi
 
 ##@ Combined
 
@@ -42,7 +58,7 @@ test-python: ## Run Python tests.
 test: test-go test-rust test-python ## Run tests for all languages.
 
 .PHONY: coverage
-coverage: coverage-go ## Generate coverage reports for all languages.
+coverage: coverage-go coverage-rust coverage-python ## Generate coverage reports for all languages.
 
 .PHONY: lint
-lint: lint-go ## Run linters for all languages.
+lint: lint-go lint-rust lint-python ## Run linters for all languages.
