@@ -103,9 +103,40 @@ jobs:
       - name: Run Unit Tests
         run: pytest
 
+  test-typescript:
+    name: Test TypeScript
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./typescript
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ./typescript/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run Linter
+        run: npx eslint src
+
+      - name: Build
+        run: npx tsc -p tsconfig.build.json
+
+      - name: Run Unit Tests
+        run: npx vitest run
+
   release:
     name: Release Packages
-    needs: [test-go, test-rust, test-python]
+    needs: [test-go, test-rust, test-python, test-typescript]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -156,3 +187,21 @@ jobs:
           else
             echo "PYPI_API_TOKEN is not set. Skipping PyPI publish."
           fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@kdex-tech'
+
+      - name: Build and Publish TypeScript Package
+        working-directory: ./typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          npm version --no-git-tag-version "$VERSION"
+          npm ci --no-audit --no-fund
+          npm run build
+          npm publish

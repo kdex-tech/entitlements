@@ -52,13 +52,27 @@ coverage-python: ## Generate Python test coverage report.
 lint-python: ## Run Python linter.
 	@if [ -d python ]; then $(MAKE) -C python lint; else echo "Python implementation not found"; fi
 
+##@ TypeScript
+
+.PHONY: test-typescript
+test-typescript: ## Run TypeScript tests.
+	@if [ -d typescript ]; then $(MAKE) -C typescript test; else echo "TypeScript implementation not found"; fi
+
+.PHONY: coverage-typescript
+coverage-typescript: ## Generate TypeScript test coverage report.
+	@if [ -d typescript ]; then $(MAKE) -C typescript coverage; else echo "TypeScript implementation not found"; fi
+
+.PHONY: lint-typescript
+lint-typescript: ## Run TypeScript linter.
+	@if [ -d typescript ]; then $(MAKE) -C typescript lint; else echo "TypeScript implementation not found"; fi
+
 ##@ Combined
 
 .PHONY: test
-test: test-go test-rust test-python ## Run tests for all languages.
+test: test-go test-rust test-python test-typescript ## Run tests for all languages.
 
 .PHONY: coverage
-coverage: coverage-go coverage-rust coverage-python ## Generate coverage reports for all languages.
+coverage: coverage-go coverage-rust coverage-python coverage-typescript ## Generate coverage reports for all languages.
 
 .PHONY: lint
-lint: lint-go lint-rust lint-python ## Run linters for all languages.
+lint: lint-go lint-rust lint-python lint-typescript ## Run linters for all languages.
