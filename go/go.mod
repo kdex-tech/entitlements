@@ -1,4 +1,4 @@
-module github.com/kdex-tech/entitlements
+module github.com/kdex-tech/entitlements/go
 
 go 1.26.0
 

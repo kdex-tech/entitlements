@@ -3,7 +3,7 @@ package entitlements_test
 import (
 	"testing"
 
-	"github.com/kdex-tech/entitlements"
+	"github.com/kdex-tech/entitlements/go"
 	"github.com/stretchr/testify/assert"
 )
 
