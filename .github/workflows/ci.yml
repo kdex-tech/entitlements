@@ -150,6 +150,22 @@ jobs:
         with:
           generate_release_notes: true
 
+      - name: Tag Go module subdirectory
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The Go module lives at /go/, so Go's tooling requires a
+          # parallel tag of the form go/vX.Y.Z pointing at the same commit
+          # as the canonical vX.Y.Z release tag that triggered this job.
+          # See https://go.dev/ref/mod#vcs-version for why subdir modules
+          # need this convention.
+          VERSION=${GITHUB_REF#refs/tags/}
+          GO_TAG="go/$VERSION"
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag "$GO_TAG" "$GITHUB_SHA" || true
+          git push origin "$GO_TAG" || true
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       
