@@ -582,6 +582,113 @@ func TestEntitlementsChecker_VerifyResourceEntitlements_ReadByDefault_False(t *t
 	}
 }
 
+// TestEntitlementsChecker_VerifyResourceEntitlements_PathResourceNames regresses
+// against a previous asymmetry where the identity built inside
+// VerifyResourceParsedEntitlements / CalculateResourceRequirements ran the
+// caller-supplied resourceName through url.PathEscape while parsePattern (used
+// for both anonymousEntitlements and Requirements) left user-supplied
+// resourceNames verbatim. A resourceName like "/" came back as "%2F" on the
+// identity side and "/" on the entitlement / requirement side, and the
+// specific-name compare in matches() does raw-string equality - so any
+// non-wildcard entitlement naming a path with reserved chars could not match
+// what the identity check produced.
+//
+// The intent enforced here: a path-specific anonymous grant matches GETs on
+// that exact path but not on sibling paths, and a path-specific requirement
+// composed against an anonymous wildcard / authenticated entitlement still
+// gates correctly.
+func TestEntitlementsChecker_VerifyResourceEntitlements_PathResourceNames(t *testing.T) {
+	tests := []struct {
+		name                  string
+		anonymousEntitlements []string
+		resource              string
+		resourceName          string
+		entitlements          entitlements.Entitlements
+		requirements          entitlements.Requirements
+		want                  bool
+	}{
+		{
+			name:                  "anon path-specific grant matches its exact path",
+			anonymousEntitlements: []string{"pages:/:read"},
+			resource:              "pages",
+			resourceName:          "/",
+			entitlements:          entitlements.Entitlements{},
+			requirements:          entitlements.Requirements{},
+			want:                  true,
+		},
+		{
+			name:                  "anon path-specific grant does not match sibling path",
+			anonymousEntitlements: []string{"pages:/:read"},
+			resource:              "pages",
+			resourceName:          "/admin",
+			entitlements:          entitlements.Entitlements{},
+			requirements:          entitlements.Requirements{},
+			want:                  false,
+		},
+		{
+			name:                  "anon wildcard matches any path",
+			anonymousEntitlements: []string{"pages:read"},
+			resource:              "pages",
+			resourceName:          "/admin",
+			entitlements:          entitlements.Entitlements{},
+			requirements:          entitlements.Requirements{},
+			want:                  true,
+		},
+		{
+			name:                  "path-specific requirement + matching anon grant authorizes target path",
+			anonymousEntitlements: []string{"pages:/:read"},
+			resource:              "pages",
+			resourceName:          "/",
+			entitlements:          entitlements.Entitlements{},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:/:read"}},
+			},
+			want: true,
+		},
+		{
+			name:                  "path-specific requirement + non-matching anon grant denies",
+			anonymousEntitlements: []string{"pages:/:read"},
+			resource:              "pages",
+			resourceName:          "/admin",
+			entitlements:          entitlements.Entitlements{},
+			requirements: entitlements.Requirements{
+				{"bearer": {"pages:/admin:read"}},
+			},
+			want: false,
+		},
+		{
+			name:                  "path-with-subsegment grant matches its exact path",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "/foo",
+			entitlements: entitlements.Entitlements{
+				"bearer": {"pages:/foo:read"},
+			},
+			requirements: entitlements.Requirements{},
+			want:         true,
+		},
+		{
+			name:                  "path-with-subsegment grant does not match sibling path",
+			anonymousEntitlements: []string{},
+			resource:              "pages",
+			resourceName:          "/bar",
+			entitlements: entitlements.Entitlements{
+				"bearer": {"pages:/foo:read"},
+			},
+			requirements: entitlements.Requirements{},
+			want:         false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ec := entitlements.NewEntitlementsChecker(tt.anonymousEntitlements, "", false)
+			got, err := ec.VerifyResourceEntitlements(tt.resource, tt.resourceName, tt.entitlements, tt.requirements)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestEntitlementsChecker_CalculateResourceRequirements(t *testing.T) {
 	tests := []struct {
 		name          string

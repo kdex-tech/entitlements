@@ -3,7 +3,6 @@ package entitlements
 import (
 	"fmt"
 	"maps"
-	"net/url"
 	"strings"
 	"sync"
 
@@ -33,8 +32,14 @@ type Entitlements map[string][]string
 // like HTTP Headers.
 //
 // Encoding:
-// resourceName should be URL-encoded (url.PathEscape) if it contains colons ':'
-// to prevent it from being misinterpreted by the pattern splitting logic.
+// resourceName must not contain colons ':' since they would be misinterpreted
+// by the pattern splitting logic. The library does not escape resourceNames -
+// the same string is used on both sides of every match comparison, so callers
+// must use the same form when writing entitlements/requirements as they pass
+// to the Verify*ResourceEntitlements / CalculateResourceRequirements helpers.
+// If a caller's natural resourceName carries a ':', encode it consistently
+// (e.g. url.PathEscape) at the caller's boundary on both the input side and
+// the verification side.
 //
 // Examples:
 //   - pages:/foo:read - read access to page "foo" (explicit resource name)
@@ -121,7 +126,7 @@ func (ec *EntitlementsChecker) CalculateResourceRequirements(
 
 	// In order for pattern matching to work we need to create and add an identity requirement.
 	// Manual concatenation is faster than fmt.Sprintf
-	identity := resource + ":" + url.PathEscape(resourceName) + ":" + verb
+	identity := resource + ":" + resourceName + ":" + verb
 
 	// We must return a new structure to avoid modifying the input, but we can do it efficiently.
 	newRequirements := make(Requirements, 0, len(requirements)+1)
@@ -257,7 +262,7 @@ func (ec *EntitlementsChecker) VerifyResourceParsedEntitlements(
 	}
 
 	// Check if user satisfies the resource identity requirement.
-	identity := resource + ":" + url.PathEscape(resourceName) + ":" + verb
+	identity := resource + ":" + resourceName + ":" + verb
 	parsedIdentity := ec.parsePattern(identity)
 
 	hasIdentity := ec.grantReadyByDefault || ec.hasParsedEntitlement(parsedEntitlements.patterns[ec.defaultScheme], ec.defaultScheme, parsedIdentity)
