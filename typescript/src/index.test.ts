@@ -413,6 +413,98 @@ describe("verifyResourceEntitlements with grantReadyByDefault=false", () => {
   }
 });
 
+// Regression against a previous asymmetry where verify{,Parsed}ResourceEntitlements
+// and calculateResourceRequirements ran the caller-supplied resourceName through
+// encodeURIComponent when building the identity, but parsePattern (used for both
+// anonymousEntitlements and Requirements) left user-supplied resourceNames
+// verbatim. A resourceName like "/" came back as "%2F" on the identity side and
+// "/" on the entitlement / requirement side, and the specific-name compare in
+// matches() does raw-string equality - so any non-wildcard entitlement naming a
+// path with reserved chars could not match the identity check. Mirrors the Go
+// regression at kdex-entitlements/go/entitlements_test.go's
+// TestEntitlementsChecker_VerifyResourceEntitlements_PathResourceNames.
+const pathResourceNameCases: ResourceCase[] = [
+  {
+    name: "anon path-specific grant matches its exact path",
+    anonymousEntitlements: ["pages:/:read"],
+    resource: "pages",
+    resourceName: "/",
+    entitlements: {},
+    requirements: [],
+    want: true,
+  },
+  {
+    name: "anon path-specific grant does not match sibling path",
+    anonymousEntitlements: ["pages:/:read"],
+    resource: "pages",
+    resourceName: "/admin",
+    entitlements: {},
+    requirements: [],
+    want: false,
+  },
+  {
+    name: "anon wildcard matches any path",
+    anonymousEntitlements: ["pages:read"],
+    resource: "pages",
+    resourceName: "/admin",
+    entitlements: {},
+    requirements: [],
+    want: true,
+  },
+  {
+    name: "path-specific requirement + matching anon grant authorizes target path",
+    anonymousEntitlements: ["pages:/:read"],
+    resource: "pages",
+    resourceName: "/",
+    entitlements: {},
+    requirements: [{ bearer: ["pages:/:read"] }],
+    want: true,
+  },
+  {
+    name: "path-specific requirement + non-matching anon grant denies",
+    anonymousEntitlements: ["pages:/:read"],
+    resource: "pages",
+    resourceName: "/admin",
+    entitlements: {},
+    requirements: [{ bearer: ["pages:/admin:read"] }],
+    want: false,
+  },
+  {
+    name: "path-with-subsegment grant matches its exact path",
+    anonymousEntitlements: [],
+    resource: "pages",
+    resourceName: "/foo",
+    entitlements: { bearer: ["pages:/foo:read"] },
+    requirements: [],
+    want: true,
+  },
+  {
+    name: "path-with-subsegment grant does not match sibling path",
+    anonymousEntitlements: [],
+    resource: "pages",
+    resourceName: "/bar",
+    entitlements: { bearer: ["pages:/foo:read"] },
+    requirements: [],
+    want: false,
+  },
+];
+
+describe("verifyResourceEntitlements with path resourceNames", () => {
+  for (const tc of pathResourceNameCases) {
+    it(tc.name, () => {
+      const ec = new EntitlementsChecker(tc.anonymousEntitlements, "", false);
+      expect(
+        ec.verifyResourceEntitlements(
+          tc.resource,
+          tc.resourceName,
+          tc.entitlements,
+          tc.requirements,
+        ),
+      ).toBe(tc.want);
+    });
+  }
+});
+
 interface CalcCase {
   name: string;
   defaultScheme: string;

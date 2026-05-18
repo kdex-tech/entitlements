@@ -9,8 +9,14 @@
  *
  * Opaque form is intended to support JWT claims and HTTP-header-style requirements.
  *
- * Encoding: resourceName should be URL-encoded (use `encodeURIComponent`) if it
- * contains colons ':' to prevent pattern-splitting from misinterpreting it.
+ * Encoding: resourceName must not contain colons ':' since they would be
+ * misinterpreted by the pattern splitting logic. The library does not encode
+ * resourceNames - the same string is used on both sides of every match
+ * comparison, so callers must use the same form when writing
+ * entitlements/requirements as they pass to
+ * verify{,Parsed}ResourceEntitlements / calculateResourceRequirements. If a
+ * caller's natural resourceName carries a ':', encode it consistently
+ * (e.g. `encodeURIComponent`) at the caller's boundary on both sides.
  */
 
 /** Map of security scheme name → list of entitlement strings. */
@@ -110,7 +116,7 @@ export class EntitlementsChecker {
     }
 
     const effectiveVerb = verb && verb !== "" ? verb : "read";
-    const identity = `${resource}:${encodeURIComponent(resourceName)}:${effectiveVerb}`;
+    const identity = `${resource}:${resourceName}:${effectiveVerb}`;
 
     if (requirements.length === 0) {
       return [{ [this.defaultScheme]: [identity] }];
@@ -216,7 +222,7 @@ export class EntitlementsChecker {
     }
 
     const effectiveVerb = verb && verb !== "" ? verb : "read";
-    const identity = `${resource}:${encodeURIComponent(resourceName)}:${effectiveVerb}`;
+    const identity = `${resource}:${resourceName}:${effectiveVerb}`;
     const parsedIdentity = this.parsePattern(identity);
 
     const list = entitlements.patterns[this.defaultScheme] ?? [];
