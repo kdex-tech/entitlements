@@ -62,7 +62,10 @@ type EntitlementsChecker struct {
 }
 
 // NewEntitlementsChecker creates a new entitlements checker with the specified settings.
-// anonymousEntitlements is a list of patterns that are granted to all users.
+// anonymousEntitlements is a list of patterns granted only to callers whose
+// entitlements map is empty (no schemes present, or every scheme's list empty).
+// Authenticated callers do not receive these patterns; use WithBaseEntitlements
+// for patterns that should apply to every caller.
 // defaultScheme is the fallback security scheme used when none is specified.
 // grantReadyByDefault determines if the identity requirement is automatically satisfied.
 func NewEntitlementsChecker(
