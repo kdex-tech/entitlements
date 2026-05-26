@@ -763,6 +763,164 @@ func TestEntitlementsChecker_CalculateResourceRequirements(t *testing.T) {
 	}
 }
 
+// TestEntitlementsChecker_AnonymousVsBase regresses the disambiguation
+// resolved in issue #3: anonymousEntitlements must apply only when the
+// caller is anonymous (empty user_entitlements); baseEntitlements (set
+// via WithBaseEntitlements) applies to every caller.
+func TestEntitlementsChecker_AnonymousVsBase(t *testing.T) {
+	tests := []struct {
+		name              string
+		anonEntitlements  []string
+		baseEntitlements  []string
+		userEntitlements  entitlements.Entitlements
+		requirements      entitlements.Requirements
+		want              bool
+	}{
+		{
+			name:             "anonymous bag applies when caller is empty",
+			anonEntitlements: []string{"public:read"},
+			userEntitlements: entitlements.Entitlements{},
+			requirements:     entitlements.Requirements{{"bearer": {"public:read"}}},
+			want:             true,
+		},
+		{
+			name:             "anonymous bag applies when caller has only empty scheme lists",
+			anonEntitlements: []string{"public:read"},
+			userEntitlements: entitlements.Entitlements{"bearer": {}},
+			requirements:     entitlements.Requirements{{"bearer": {"public:read"}}},
+			want:             true,
+		},
+		{
+			name:             "anonymous bag does NOT apply when caller has own entitlements",
+			anonEntitlements: []string{"public:read"},
+			userEntitlements: entitlements.Entitlements{"bearer": {"pages:foo:read"}},
+			requirements:     entitlements.Requirements{{"bearer": {"public:read"}}},
+			want:             false,
+		},
+		{
+			name:             "anonymous bag does NOT apply when caller has entitlements in a different scheme",
+			anonEntitlements: []string{"public:read"},
+			userEntitlements: entitlements.Entitlements{"oauth2": {"scope1"}},
+			requirements:     entitlements.Requirements{{"bearer": {"public:read"}}},
+			want:             false,
+		},
+		{
+			name:             "base bag applies to authenticated caller",
+			baseEntitlements: []string{"public:read"},
+			userEntitlements: entitlements.Entitlements{"bearer": {"pages:foo:read"}},
+			requirements:     entitlements.Requirements{{"bearer": {"public:read"}}},
+			want:             true,
+		},
+		{
+			name:             "base bag applies to anonymous caller",
+			baseEntitlements: []string{"public:read"},
+			userEntitlements: entitlements.Entitlements{},
+			requirements:     entitlements.Requirements{{"bearer": {"public:read"}}},
+			want:             true,
+		},
+		{
+			name:             "both bags configured: authed caller gets base but not anonymous",
+			anonEntitlements: []string{"anon:read"},
+			baseEntitlements: []string{"base:read"},
+			userEntitlements: entitlements.Entitlements{"bearer": {"pages:foo:read"}},
+			requirements:     entitlements.Requirements{{"bearer": {"base:read"}}},
+			want:             true,
+		},
+		{
+			name:             "both bags configured: authed caller does not get anonymous",
+			anonEntitlements: []string{"anon:read"},
+			baseEntitlements: []string{"base:read"},
+			userEntitlements: entitlements.Entitlements{"bearer": {"pages:foo:read"}},
+			requirements:     entitlements.Requirements{{"bearer": {"anon:read"}}},
+			want:             false,
+		},
+		{
+			name:             "both bags configured: anonymous caller gets both",
+			anonEntitlements: []string{"anon:read"},
+			baseEntitlements: []string{"base:read"},
+			userEntitlements: entitlements.Entitlements{},
+			requirements:     entitlements.Requirements{{"bearer": {"anon:read", "base:read"}}},
+			want:             true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ec := entitlements.NewEntitlementsChecker(tt.anonEntitlements, "bearer", false)
+			if tt.baseEntitlements != nil {
+				ec = ec.WithBaseEntitlements(tt.baseEntitlements)
+			}
+			got := ec.VerifyEntitlements(tt.userEntitlements, tt.requirements)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestEntitlementsChecker_WithBaseEntitlements_Replaces verifies the
+// setter replaces rather than appends.
+func TestEntitlementsChecker_WithBaseEntitlements_Replaces(t *testing.T) {
+	ec := entitlements.NewEntitlementsChecker(nil, "bearer", false).
+		WithBaseEntitlements([]string{"first:read"}).
+		WithBaseEntitlements([]string{"second:read"})
+
+	// "first:read" no longer in the base bag
+	assert.False(t, ec.VerifyEntitlements(
+		entitlements.Entitlements{"bearer": {"pages:foo:read"}},
+		entitlements.Requirements{{"bearer": {"first:read"}}},
+	))
+
+	// "second:read" is still there
+	assert.True(t, ec.VerifyEntitlements(
+		entitlements.Entitlements{"bearer": {"pages:foo:read"}},
+		entitlements.Requirements{{"bearer": {"second:read"}}},
+	))
+}
+
+// TestEntitlementsChecker_VerifyResourceEntitlements_AnonymousVsBase verifies
+// the resource identity path honors the new semantic.
+func TestEntitlementsChecker_VerifyResourceEntitlements_AnonymousVsBase(t *testing.T) {
+	tests := []struct {
+		name             string
+		anonEntitlements []string
+		baseEntitlements []string
+		userEntitlements entitlements.Entitlements
+		resourceName     string
+		want             bool
+	}{
+		{
+			name:             "anon caller satisfies identity via base",
+			baseEntitlements: []string{"pages:/foo:read"},
+			userEntitlements: entitlements.Entitlements{},
+			resourceName:     "/foo",
+			want:             true,
+		},
+		{
+			name:             "authed caller satisfies identity via base",
+			baseEntitlements: []string{"pages:/foo:read"},
+			userEntitlements: entitlements.Entitlements{"bearer": {"other:read"}},
+			resourceName:     "/foo",
+			want:             true,
+		},
+		{
+			name:             "authed caller does NOT satisfy identity via anonymous",
+			anonEntitlements: []string{"pages:/foo:read"},
+			userEntitlements: entitlements.Entitlements{"bearer": {"other:read"}},
+			resourceName:     "/foo",
+			want:             false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ec := entitlements.NewEntitlementsChecker(tt.anonEntitlements, "bearer", false)
+			if tt.baseEntitlements != nil {
+				ec = ec.WithBaseEntitlements(tt.baseEntitlements)
+			}
+			got, err := ec.VerifyResourceEntitlements("pages", tt.resourceName, tt.userEntitlements, entitlements.Requirements{})
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func BenchmarkVerifyEntitlements_Simple(b *testing.B) {
 	ec := entitlements.NewEntitlementsChecker(nil, "bearer", false)
 	userEntitlements := entitlements.Entitlements{

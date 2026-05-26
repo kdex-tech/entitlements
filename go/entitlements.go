@@ -53,6 +53,7 @@ type Entitlements map[string][]string
 //   - email -           exact match only (opaque form)
 type EntitlementsChecker struct {
 	anonymousPatterns   []entitlementPattern
+	basePatterns        []entitlementPattern
 	cache               map[string]entitlementPattern
 	defaultScheme       string
 	grantReadyByDefault bool
@@ -211,9 +212,9 @@ func (ec *EntitlementsChecker) VerifyParsedEntitlements(
 		return true
 	}
 
-	// Here requirements are OR'd - user needs to satisfy at least one
+	anon := isAnonymousCaller(entitlements.patterns)
 	for _, requirement := range requirements.patterns {
-		if ec.satisfiesAndRequirements(entitlements.patterns, requirement) {
+		if ec.satisfiesAndRequirements(entitlements.patterns, requirement, anon) {
 			result = true
 			return
 		}
@@ -261,21 +262,38 @@ func (ec *EntitlementsChecker) VerifyResourceParsedEntitlements(
 		verb = verbs[0]
 	}
 
-	// Check if user satisfies the resource identity requirement.
 	identity := resource + ":" + resourceName + ":" + verb
 	parsedIdentity := ec.parsePattern(identity)
 
-	hasIdentity := ec.grantReadyByDefault || ec.hasParsedEntitlement(parsedEntitlements.patterns[ec.defaultScheme], ec.defaultScheme, parsedIdentity)
+	anon := isAnonymousCaller(parsedEntitlements.patterns)
+	hasIdentity := ec.grantReadyByDefault || ec.hasParsedEntitlement(parsedEntitlements.patterns[ec.defaultScheme], ec.defaultScheme, parsedIdentity, anon)
 	if !hasIdentity {
 		return false, nil
 	}
 
-	// Verify the rest of the requirements.
 	if len(parsedRequirements.patterns) == 0 {
 		return true, nil
 	}
 
 	return ec.VerifyParsedEntitlements(parsedEntitlements, parsedRequirements), nil
+}
+
+// WithBaseEntitlements sets the base entitlements: patterns that apply to
+// every caller (authenticated or anonymous) under the default scheme.
+// Unlike anonymousEntitlements (which apply only when the caller's
+// entitlements map is empty), base entitlements form a floor of grants
+// that every request receives.
+//
+// Replaces any previously set base entitlements. Intended for use during
+// checker construction; not safe for concurrent mutation with verify
+// calls in flight.
+func (ec *EntitlementsChecker) WithBaseEntitlements(patterns []string) *EntitlementsChecker {
+	parsed := make([]entitlementPattern, len(patterns))
+	for i, s := range patterns {
+		parsed[i] = ec.parsePattern(s)
+	}
+	ec.basePatterns = parsed
+	return ec
 }
 
 // WithLogger attaches a logger to the EntitlementsChecker for debugging purposes.
@@ -285,19 +303,27 @@ func (ec *EntitlementsChecker) WithLogger(log logr.Logger) *EntitlementsChecker 
 }
 
 // hasParsedEntitlement checks if the user has a specific entitlement using pre-parsed patterns.
-func (ec *EntitlementsChecker) hasParsedEntitlement(entitlementList []entitlementPattern, scheme string, requirement entitlementPattern) bool {
-	// Check user-provided entitlements for this scheme
+func (ec *EntitlementsChecker) hasParsedEntitlement(entitlementList []entitlementPattern, scheme string, requirement entitlementPattern, isAnonymousCaller bool) bool {
+	// Caller's own entitlements for this scheme.
 	for _, entitlement := range entitlementList {
 		if entitlement.matches(requirement) {
 			return true
 		}
 	}
 
-	// Check anonymous entitlements if we are checking the default scheme
 	if scheme == ec.defaultScheme {
-		for _, pattern := range ec.anonymousPatterns {
+		// Base entitlements always apply.
+		for _, pattern := range ec.basePatterns {
 			if pattern.matches(requirement) {
 				return true
+			}
+		}
+		// Anonymous entitlements apply only when caller is anonymous.
+		if isAnonymousCaller {
+			for _, pattern := range ec.anonymousPatterns {
+				if pattern.matches(requirement) {
+					return true
+				}
 			}
 		}
 	}
@@ -359,16 +385,16 @@ func (ec *EntitlementsChecker) parsePattern(s string) entitlementPattern {
 	return p
 }
 
-func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string][]entitlementPattern, requirement map[string][]entitlementPattern) bool {
-	// Here requirements are AND'ed - user must match all
+func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string][]entitlementPattern, requirement map[string][]entitlementPattern, isAnonymousCaller bool) bool {
 	for scheme, requirementList := range requirement {
-		// A scheme is satisfied if it's present in entitlements OR it's the default scheme and we have anonymous entitlements.
 		_, ok := entitlements[scheme]
-		if !ok && (scheme != ec.defaultScheme || len(ec.anonymousPatterns) <= 0) {
+		hasFallback := scheme == ec.defaultScheme &&
+			(len(ec.basePatterns) > 0 || (isAnonymousCaller && len(ec.anonymousPatterns) > 0))
+		if !ok && !hasFallback {
 			return false
 		}
 
-		if !ec.satisfiesRequirement(entitlements, scheme, requirementList) {
+		if !ec.satisfiesRequirement(entitlements, scheme, requirementList, isAnonymousCaller) {
 			return false
 		}
 	}
@@ -377,9 +403,9 @@ func (ec *EntitlementsChecker) satisfiesAndRequirements(entitlements map[string]
 }
 
 // satisfiesRequirement checks if user entitlements satisfy a single security requirement.
-func (ec *EntitlementsChecker) satisfiesRequirement(entitlements map[string][]entitlementPattern, scheme string, requirement []entitlementPattern) bool {
+func (ec *EntitlementsChecker) satisfiesRequirement(entitlements map[string][]entitlementPattern, scheme string, requirement []entitlementPattern, isAnonymousCaller bool) bool {
 	for _, parsedReq := range requirement {
-		if !ec.hasParsedEntitlement(entitlements[scheme], scheme, parsedReq) {
+		if !ec.hasParsedEntitlement(entitlements[scheme], scheme, parsedReq, isAnonymousCaller) {
 			return false
 		}
 	}
@@ -393,6 +419,20 @@ type entitlementPattern struct {
 	resourceName string
 	verb         string
 	isPattern    bool
+}
+
+// isAnonymousCaller returns true iff the caller provided no entitlements
+// at all (empty map, or every scheme has an empty list).
+func isAnonymousCaller(entitlements map[string][]entitlementPattern) bool {
+	if len(entitlements) == 0 {
+		return true
+	}
+	for _, list := range entitlements {
+		if len(list) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (ep entitlementPattern) matches(req entitlementPattern) bool {
