@@ -135,6 +135,10 @@ impl EntitlementsChecker {
         false
     }
 
+    /// Checks that every (scheme, requirement-list) pair in `req_set` is satisfied.
+    /// Each requirement must be met by the caller's own entitlements, the base bag,
+    /// or (when `is_anonymous`) the anonymous bag. Returns false on the first
+    /// unsatisfied requirement (AND semantics across schemes and patterns).
     fn verify_set(
         &self,
         user_patterns: &HashMap<String, Vec<Pattern>>,
@@ -329,6 +333,11 @@ mod tests {
         let mut empty_list = Entitlements::new();
         empty_list.insert("bearer".to_string(), vec![]);
         assert!(checker.verify(&empty_list, &need_anon));
+
+        // Caller with entitlements in a different scheme is NOT anonymous
+        let mut other_scheme = Entitlements::new();
+        other_scheme.insert("oauth2".to_string(), vec!["scope1".to_string()]);
+        assert!(!checker.verify(&other_scheme, &need_anon));
     }
 
     #[test]
