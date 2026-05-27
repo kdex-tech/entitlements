@@ -592,6 +592,22 @@ describe("anonymous vs base entitlements", () => {
       ec.verifyResourceEntitlements("pages", "/foo", { bearer: ["other:read"] }, []),
     ).toBe(false);
   });
+
+  it("verifyResourceEntitlements: anon caller satisfies identity via base", () => {
+    const ec = new EntitlementsChecker([], "bearer", false).withBaseEntitlements([
+      "pages:/foo:read",
+    ]);
+    expect(
+      ec.verifyResourceEntitlements("pages", "/foo", {}, []),
+    ).toBe(true);
+  });
+
+  it("verifyResourceEntitlements: anon caller satisfies identity via anonymous bag", () => {
+    const ec = new EntitlementsChecker(["pages:/foo:read"], "bearer", false);
+    expect(
+      ec.verifyResourceEntitlements("pages", "/foo", {}, []),
+    ).toBe(true);
+  });
 });
 
 interface CalcCase {
