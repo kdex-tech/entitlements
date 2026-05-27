@@ -14,7 +14,7 @@ npm install @kdex-tech/entitlements
 import { EntitlementsChecker } from "@kdex-tech/entitlements";
 
 const ec = new EntitlementsChecker(
-  ["public:read"],  // anonymous entitlements (granted to all callers)
+  ["public:read"],  // anonymous-only: applied when the caller's entitlements bag is empty
   "bearer",          // default scheme
   false,             // grantReadyByDefault
 );
@@ -37,6 +37,20 @@ const parsedEnt = ec.parseEntitlements(userEntitlements);
 const parsedReq = ec.parseRequirements(requirements);
 ec.verifyParsedEntitlements(parsedEnt, parsedReq);
 ```
+
+## Base entitlements (floor for every caller)
+
+`anonymousEntitlements` (the constructor argument) is applied **only** to callers who pass an empty entitlements map. For grants that should apply to every caller — authenticated or anonymous — use the fluent `withBaseEntitlements` setter:
+
+```ts
+const ec = new EntitlementsChecker(
+  ["public:read"],  // anonymous-only: only fires when caller's bag is empty
+  "bearer",
+  false,
+).withBaseEntitlements(["heartbeat:read"]);  // floor: every caller gets this
+```
+
+Calling `withBaseEntitlements` again replaces the previously set list.
 
 ## Build
 
