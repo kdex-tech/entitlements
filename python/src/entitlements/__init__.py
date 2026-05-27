@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 import dataclasses
 
 # Types
@@ -51,44 +51,72 @@ class Pattern:
 
 class EntitlementsChecker:
     def __init__(self, anonymous_entitlements: Optional[List[str]] = None, default_scheme: str = "bearer"):
-        self.anonymous_entitlements = anonymous_entitlements or []
+        self._anonymous_patterns: List[Pattern] = [
+            Pattern.parse(s) for s in (anonymous_entitlements or [])
+        ]
+        self._base_patterns: List[Pattern] = []
         self.default_scheme = default_scheme
+
+    def with_base_entitlements(self, patterns: List[str]) -> "EntitlementsChecker":
+        """Sets the base entitlements: patterns that apply to every caller
+        (authenticated or anonymous) under the default scheme. Unlike
+        anonymous_entitlements (which apply only when the caller's
+        entitlements map is empty), base entitlements form a floor of
+        grants that every request receives.
+
+        Replaces any previously set base entitlements. Returns self for
+        chaining. Intended for use during checker construction; not safe
+        for concurrent mutation with verify calls in flight.
+        """
+        self._base_patterns = [Pattern.parse(s) for s in patterns]
+        return self
 
     def verify(self, user_entitlements: Entitlements, requirements: Requirements) -> bool:
         if not requirements:
             return True
 
-        # Merge with anonymous
-        merged = {k: list(v) for k, v in user_entitlements.items()}
-        if self.anonymous_entitlements:
-            scheme_list = merged.setdefault(self.default_scheme, [])
-            for anon in self.anonymous_entitlements:
-                if anon not in scheme_list:
-                    scheme_list.append(anon)
-
-        # Pre-parse entitlements
-        parsed_entitlements: Dict[SecurityScheme, List[Pattern]] = {
+        parsed: Dict[SecurityScheme, List[Pattern]] = {
             scheme: [Pattern.parse(e) for e in entries]
-            for scheme, entries in merged.items()
+            for scheme, entries in user_entitlements.items()
         }
+        is_anonymous = not parsed or all(not v for v in parsed.values())
 
-        # OR logic for requirements list
         for req_set in requirements:
-            if self._verify_set(parsed_entitlements, req_set):
+            if self._verify_set(parsed, req_set, is_anonymous):
                 return True
-        
         return False
 
-    def _verify_set(self, user_patterns: Dict[SecurityScheme, List[Pattern]], req_set: RequirementSet) -> bool:
-        # AND logic for a requirement set
+    def _verify_set(
+        self,
+        user_patterns: Dict[SecurityScheme, List[Pattern]],
+        req_set: RequirementSet,
+        is_anonymous: bool,
+    ) -> bool:
         for scheme, required_patterns in req_set.items():
-            user_list = user_patterns.get(scheme)
-            if user_list is None:
+            user_list_present = scheme in user_patterns
+            has_fallback = scheme == self.default_scheme and (
+                bool(self._base_patterns)
+                or (is_anonymous and bool(self._anonymous_patterns))
+            )
+            if not user_list_present and not has_fallback:
                 return False
-            
+
+            user_list = user_patterns.get(scheme, [])
             for req_str in required_patterns:
                 req_p = Pattern.parse(req_str)
-                if not any(user_p.satisfies(req_p) for user_p in user_list):
+                satisfied = (
+                    any(p.satisfies(req_p) for p in user_list)
+                    or (
+                        scheme == self.default_scheme
+                        and any(p.satisfies(req_p) for p in self._base_patterns)
+                    )
+                    or (
+                        scheme == self.default_scheme
+                        and is_anonymous
+                        and any(p.satisfies(req_p) for p in self._anonymous_patterns)
+                    )
+                )
+                if not satisfied:
                     return False
         return True
 
@@ -101,15 +129,14 @@ class EntitlementsChecker:
         additional_requirements: Optional[Requirements] = None
     ) -> bool:
         identity_req = f"{resource}:{name}:{verb}"
-        
+
         if not additional_requirements:
             return self.verify(user_entitlements, [{self.default_scheme: [identity_req]}])
-        
-        # Identity AND (additional requirements OR...)
+
         combined: Requirements = []
         for req_set in additional_requirements:
             new_set = dict(req_set)
             new_set.setdefault(self.default_scheme, []).append(identity_req)
             combined.append(new_set)
-        
+
         return self.verify(user_entitlements, combined)
