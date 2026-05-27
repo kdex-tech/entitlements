@@ -83,10 +83,22 @@ function matches(ep: EntitlementPattern, req: EntitlementPattern): boolean {
   return ep.resourceName === req.resourceName;
 }
 
+function isAnonymousCallerPatterns(
+  patterns: Record<string, EntitlementPattern[]>,
+): boolean {
+  const schemes = Object.keys(patterns);
+  if (schemes.length === 0) return true;
+  for (const k of schemes) {
+    if ((patterns[k]?.length ?? 0) > 0) return false;
+  }
+  return true;
+}
+
 export class EntitlementsChecker {
   readonly defaultScheme: string;
   readonly grantReadyByDefault: boolean;
   private readonly anonymousPatterns: EntitlementPattern[];
+  private basePatterns: EntitlementPattern[] = [];
   private readonly cache = new Map<string, EntitlementPattern>();
 
   constructor(
@@ -99,6 +111,22 @@ export class EntitlementsChecker {
     this.anonymousPatterns = (anonymousEntitlements ?? []).map((s) =>
       this.parsePattern(s),
     );
+  }
+
+  /**
+   * Sets the base entitlements: patterns that apply to every caller
+   * (authenticated or anonymous) under the default scheme. Unlike the
+   * constructor's `anonymousEntitlements` (which apply only when the
+   * caller's entitlements map is empty), base entitlements form a floor
+   * of grants that every request receives.
+   *
+   * Replaces any previously set base entitlements. Returns `this` for
+   * chaining. Intended for use during construction; not safe for
+   * concurrent mutation with verify calls in flight.
+   */
+  withBaseEntitlements(patterns: readonly string[]): this {
+    this.basePatterns = patterns.map((s) => this.parsePattern(s));
+    return this;
   }
 
   /**
@@ -178,8 +206,9 @@ export class EntitlementsChecker {
     if (requirements.patterns.length === 0) {
       return true;
     }
+    const isAnonymous = isAnonymousCallerPatterns(entitlements.patterns);
     for (const requirement of requirements.patterns) {
-      if (this.satisfiesAndRequirements(entitlements.patterns, requirement)) {
+      if (this.satisfiesAndRequirements(entitlements.patterns, requirement, isAnonymous)) {
         return true;
       }
     }
@@ -226,9 +255,10 @@ export class EntitlementsChecker {
     const parsedIdentity = this.parsePattern(identity);
 
     const list = entitlements.patterns[this.defaultScheme] ?? [];
+    const isAnonymous = isAnonymousCallerPatterns(entitlements.patterns);
     const hasIdentity =
       this.grantReadyByDefault ||
-      this.hasParsedEntitlement(list, this.defaultScheme, parsedIdentity);
+      this.hasParsedEntitlement(list, this.defaultScheme, parsedIdentity, isAnonymous);
     if (!hasIdentity) {
       return false;
     }
@@ -243,17 +273,19 @@ export class EntitlementsChecker {
     entitlementList: EntitlementPattern[],
     scheme: string,
     requirement: EntitlementPattern,
+    isAnonymousCaller: boolean,
   ): boolean {
     for (const e of entitlementList) {
-      if (matches(e, requirement)) {
-        return true;
-      }
+      if (matches(e, requirement)) return true;
     }
 
     if (scheme === this.defaultScheme) {
-      for (const e of this.anonymousPatterns) {
-        if (matches(e, requirement)) {
-          return true;
+      for (const e of this.basePatterns) {
+        if (matches(e, requirement)) return true;
+      }
+      if (isAnonymousCaller) {
+        for (const e of this.anonymousPatterns) {
+          if (matches(e, requirement)) return true;
         }
       }
     }
@@ -304,17 +336,17 @@ export class EntitlementsChecker {
   private satisfiesAndRequirements(
     entitlements: Record<string, EntitlementPattern[]>,
     requirement: Record<string, EntitlementPattern[]>,
+    isAnonymousCaller: boolean,
   ): boolean {
     for (const [scheme, requirementList] of Object.entries(requirement)) {
-      // A scheme is satisfied if it's present in the user's entitlements OR
-      // it's the default scheme and we have anonymous entitlements.
-      if (
-        !(scheme in entitlements) &&
-        !(scheme === this.defaultScheme && this.anonymousPatterns.length > 0)
-      ) {
-        return false;
-      }
-      if (!this.satisfiesRequirement(entitlements, scheme, requirementList)) {
+      const userHas = scheme in entitlements;
+      const hasFallback =
+        scheme === this.defaultScheme &&
+        (this.basePatterns.length > 0 ||
+          (isAnonymousCaller && this.anonymousPatterns.length > 0));
+      if (!userHas && !hasFallback) return false;
+
+      if (!this.satisfiesRequirement(entitlements, scheme, requirementList, isAnonymousCaller)) {
         return false;
       }
     }
@@ -325,10 +357,11 @@ export class EntitlementsChecker {
     entitlements: Record<string, EntitlementPattern[]>,
     scheme: string,
     requirement: EntitlementPattern[],
+    isAnonymousCaller: boolean,
   ): boolean {
     const list = entitlements[scheme] ?? [];
     for (const r of requirement) {
-      if (!this.hasParsedEntitlement(list, scheme, r)) {
+      if (!this.hasParsedEntitlement(list, scheme, r, isAnonymousCaller)) {
         return false;
       }
     }
