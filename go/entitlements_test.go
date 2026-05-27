@@ -769,12 +769,12 @@ func TestEntitlementsChecker_CalculateResourceRequirements(t *testing.T) {
 // via WithBaseEntitlements) applies to every caller.
 func TestEntitlementsChecker_AnonymousVsBase(t *testing.T) {
 	tests := []struct {
-		name              string
-		anonEntitlements  []string
-		baseEntitlements  []string
-		userEntitlements  entitlements.Entitlements
-		requirements      entitlements.Requirements
-		want              bool
+		name             string
+		anonEntitlements []string
+		baseEntitlements []string
+		userEntitlements entitlements.Entitlements
+		requirements     entitlements.Requirements
+		want             bool
 	}{
 		{
 			name:             "anonymous bag applies when caller is empty",
@@ -906,6 +906,13 @@ func TestEntitlementsChecker_VerifyResourceEntitlements_AnonymousVsBase(t *testi
 			userEntitlements: entitlements.Entitlements{"bearer": {"other:read"}},
 			resourceName:     "/foo",
 			want:             false,
+		},
+		{
+			name:             "anon caller satisfies identity via anonymous",
+			anonEntitlements: []string{"pages:/foo:read"},
+			userEntitlements: entitlements.Entitlements{},
+			resourceName:     "/foo",
+			want:             true,
 		},
 	}
 	for _, tt := range tests {
