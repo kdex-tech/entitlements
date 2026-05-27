@@ -505,6 +505,111 @@ describe("verifyResourceEntitlements with path resourceNames", () => {
   }
 });
 
+describe("anonymous vs base entitlements", () => {
+  it("anonymous bag applies when caller is empty", () => {
+    const ec = new EntitlementsChecker(["public:read"], "bearer", false);
+    expect(ec.verifyEntitlements({}, [{ bearer: ["public:read"] }])).toBe(true);
+  });
+
+  it("anonymous bag applies when caller has only empty scheme lists", () => {
+    const ec = new EntitlementsChecker(["public:read"], "bearer", false);
+    expect(ec.verifyEntitlements({ bearer: [] }, [{ bearer: ["public:read"] }])).toBe(true);
+  });
+
+  it("anonymous bag does NOT apply when caller has own entitlements", () => {
+    const ec = new EntitlementsChecker(["public:read"], "bearer", false);
+    expect(
+      ec.verifyEntitlements({ bearer: ["pages:foo:read"] }, [{ bearer: ["public:read"] }]),
+    ).toBe(false);
+  });
+
+  it("anonymous bag does NOT apply when caller has entitlements in a different scheme", () => {
+    const ec = new EntitlementsChecker(["public:read"], "bearer", false);
+    expect(
+      ec.verifyEntitlements({ oauth2: ["scope1"] }, [{ bearer: ["public:read"] }]),
+    ).toBe(false);
+  });
+
+  it("base bag applies to authenticated caller", () => {
+    const ec = new EntitlementsChecker([], "bearer", false).withBaseEntitlements([
+      "public:read",
+    ]);
+    expect(
+      ec.verifyEntitlements({ bearer: ["pages:foo:read"] }, [{ bearer: ["public:read"] }]),
+    ).toBe(true);
+  });
+
+  it("base bag applies to anonymous caller", () => {
+    const ec = new EntitlementsChecker([], "bearer", false).withBaseEntitlements([
+      "public:read",
+    ]);
+    expect(ec.verifyEntitlements({}, [{ bearer: ["public:read"] }])).toBe(true);
+  });
+
+  it("both bags: authed caller gets base but not anonymous", () => {
+    const ec = new EntitlementsChecker(["anon:read"], "bearer", false).withBaseEntitlements([
+      "base:read",
+    ]);
+    expect(
+      ec.verifyEntitlements({ bearer: ["pages:foo:read"] }, [{ bearer: ["base:read"] }]),
+    ).toBe(true);
+    expect(
+      ec.verifyEntitlements({ bearer: ["pages:foo:read"] }, [{ bearer: ["anon:read"] }]),
+    ).toBe(false);
+  });
+
+  it("both bags: anonymous caller gets both", () => {
+    const ec = new EntitlementsChecker(["anon:read"], "bearer", false).withBaseEntitlements([
+      "base:read",
+    ]);
+    expect(ec.verifyEntitlements({}, [{ bearer: ["anon:read", "base:read"] }])).toBe(true);
+  });
+
+  it("withBaseEntitlements replaces (does not append)", () => {
+    const ec = new EntitlementsChecker([], "bearer", false)
+      .withBaseEntitlements(["first:read"])
+      .withBaseEntitlements(["second:read"]);
+    expect(
+      ec.verifyEntitlements({ bearer: ["pages:foo:read"] }, [{ bearer: ["first:read"] }]),
+    ).toBe(false);
+    expect(
+      ec.verifyEntitlements({ bearer: ["pages:foo:read"] }, [{ bearer: ["second:read"] }]),
+    ).toBe(true);
+  });
+
+  it("verifyResourceEntitlements: authed caller satisfies identity via base", () => {
+    const ec = new EntitlementsChecker([], "bearer", false).withBaseEntitlements([
+      "pages:/foo:read",
+    ]);
+    expect(
+      ec.verifyResourceEntitlements("pages", "/foo", { bearer: ["other:read"] }, []),
+    ).toBe(true);
+  });
+
+  it("verifyResourceEntitlements: authed caller does NOT satisfy identity via anonymous", () => {
+    const ec = new EntitlementsChecker(["pages:/foo:read"], "bearer", false);
+    expect(
+      ec.verifyResourceEntitlements("pages", "/foo", { bearer: ["other:read"] }, []),
+    ).toBe(false);
+  });
+
+  it("verifyResourceEntitlements: anon caller satisfies identity via base", () => {
+    const ec = new EntitlementsChecker([], "bearer", false).withBaseEntitlements([
+      "pages:/foo:read",
+    ]);
+    expect(
+      ec.verifyResourceEntitlements("pages", "/foo", {}, []),
+    ).toBe(true);
+  });
+
+  it("verifyResourceEntitlements: anon caller satisfies identity via anonymous bag", () => {
+    const ec = new EntitlementsChecker(["pages:/foo:read"], "bearer", false);
+    expect(
+      ec.verifyResourceEntitlements("pages", "/foo", {}, []),
+    ).toBe(true);
+  });
+});
+
 interface CalcCase {
   name: string;
   defaultScheme: string;

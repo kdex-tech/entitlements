@@ -85,16 +85,32 @@ impl Pattern {
 
 /// The main entitlements checker.
 pub struct EntitlementsChecker {
-    anonymous_entitlements: Vec<String>,
+    anonymous_entitlements: Vec<Pattern>,
+    base_entitlements: Vec<Pattern>,
     default_scheme: String,
 }
 
 impl EntitlementsChecker {
     pub fn new(anonymous_entitlements: Vec<String>, default_scheme: String) -> Self {
+        let parsed_anon = anonymous_entitlements.iter().map(|s| Pattern::parse(s)).collect();
         Self {
-            anonymous_entitlements,
+            anonymous_entitlements: parsed_anon,
+            base_entitlements: Vec::new(),
             default_scheme,
         }
+    }
+
+    /// Sets the base entitlements: patterns that apply to every caller
+    /// (authenticated or anonymous) under the default scheme. Unlike
+    /// `anonymous_entitlements` (which apply only when the caller's
+    /// entitlements map is empty), base entitlements form a floor of grants
+    /// that every request receives.
+    ///
+    /// Replaces any previously set base entitlements. Consuming-self
+    /// builder; intended for use during checker construction.
+    pub fn with_base_entitlements(mut self, patterns: Vec<String>) -> Self {
+        self.base_entitlements = patterns.iter().map(|s| Pattern::parse(s)).collect();
+        self
     }
 
     /// Verifies if the user's entitlements satisfy any of the requirements.
@@ -103,33 +119,15 @@ impl EntitlementsChecker {
             return true;
         }
 
-        // Merge user entitlements with anonymous ones
-        let mut merged = user_entitlements.clone();
-        if !self.anonymous_entitlements.is_empty() {
-            let entry = merged
-                .entry(self.default_scheme.clone())
-                .or_default();
-            for anon in &self.anonymous_entitlements {
-                if !entry.contains(anon) {
-                    entry.push(anon.clone());
-                }
-            }
-        }
-
-        // Pre-parse user entitlements for performance
-        let parsed_entitlements: HashMap<String, Vec<Pattern>> = merged
+        let parsed: HashMap<String, Vec<Pattern>> = user_entitlements
             .iter()
-            .map(|(scheme, list)| {
-                (
-                    scheme.clone(),
-                    list.iter().map(|s| Pattern::parse(s)).collect(),
-                )
-            })
+            .map(|(scheme, list)| (scheme.clone(), list.iter().map(|s| Pattern::parse(s)).collect()))
             .collect();
 
-        // Check each alternative requirement set (OR)
+        let is_anonymous = parsed.is_empty() || parsed.values().all(|v| v.is_empty());
+
         for req_set in requirements {
-            if self.verify_set(&parsed_entitlements, req_set) {
+            if self.verify_set(&parsed, req_set, is_anonymous) {
                 return true;
             }
         }
@@ -137,23 +135,38 @@ impl EntitlementsChecker {
         false
     }
 
-    /// Verifies if a single requirement set is satisfied (AND logic).
+    /// Checks that every (scheme, requirement-list) pair in `req_set` is satisfied.
+    /// Each requirement must be met by the caller's own entitlements, the base bag,
+    /// or (when `is_anonymous`) the anonymous bag. Returns false on the first
+    /// unsatisfied requirement (AND semantics across schemes and patterns).
     fn verify_set(
         &self,
         user_patterns: &HashMap<String, Vec<Pattern>>,
         req_set: &RequirementSet,
+        is_anonymous: bool,
     ) -> bool {
         for (scheme, required_patterns) in req_set {
-            let user_list = match user_patterns.get(scheme) {
-                Some(list) => list,
-                None => return false, // Scheme not present in user entitlements
-            };
+            let user_list_present = user_patterns.contains_key(scheme);
+            let has_fallback = scheme == &self.default_scheme
+                && (!self.base_entitlements.is_empty()
+                    || (is_anonymous && !self.anonymous_entitlements.is_empty()));
+            if !user_list_present && !has_fallback {
+                return false;
+            }
+
+            let empty: Vec<Pattern> = Vec::new();
+            let user_list = user_patterns.get(scheme).unwrap_or(&empty);
 
             for req_str in required_patterns {
                 let req_p = Pattern::parse(req_str);
-                let satisfied = user_list.iter().any(|user_p| user_p.satisfies(&req_p));
-                if !satisfied {
-                    return false; // All requirements for a scheme must be met
+                let satisfied_by_user = user_list.iter().any(|p| p.satisfies(&req_p));
+                let satisfied_by_base = scheme == &self.default_scheme
+                    && self.base_entitlements.iter().any(|p| p.satisfies(&req_p));
+                let satisfied_by_anon = scheme == &self.default_scheme
+                    && is_anonymous
+                    && self.anonymous_entitlements.iter().any(|p| p.satisfies(&req_p));
+                if !satisfied_by_user && !satisfied_by_base && !satisfied_by_anon {
+                    return false;
                 }
             }
         }
@@ -170,15 +183,13 @@ impl EntitlementsChecker {
         additional_requirements: &Requirements,
     ) -> bool {
         let identity_req = format!("{}:{}:{}", resource, name, verb);
-        
-        // If no additional requirements, just check the identity
+
         if additional_requirements.is_empty() {
             let mut set = RequirementSet::new();
             set.insert(self.default_scheme.clone(), vec![identity_req]);
             return self.verify(user_entitlements, &vec![set]);
         }
 
-        // Otherwise, the identity requirement must be satisfied AND one of the alternative sets
         let mut combined_requirements = Vec::new();
         for set in additional_requirements {
             let mut new_set = set.clone();
@@ -237,11 +248,18 @@ mod tests {
         let requirements = vec![req_set];
         assert!(checker.verify(&entitlements, &requirements));
 
-        // Anonymous match
+        // Authed caller does NOT get the anonymous bag (regression for issue #3)
         let mut req_set = RequirementSet::new();
         req_set.insert("bearer".to_string(), vec!["anonymous:*:read".to_string()]);
         let requirements = vec![req_set];
-        assert!(checker.verify(&entitlements, &requirements));
+        assert!(!checker.verify(&entitlements, &requirements));
+
+        // Anonymous caller DOES get the anonymous bag
+        let empty_entitlements = Entitlements::new();
+        let mut req_set = RequirementSet::new();
+        req_set.insert("bearer".to_string(), vec!["anonymous:*:read".to_string()]);
+        let requirements = vec![req_set];
+        assert!(checker.verify(&empty_entitlements, &requirements));
 
         // Failing match
         let mut req_set = RequirementSet::new();
@@ -278,5 +296,95 @@ mod tests {
         req_set.insert("bearer".to_string(), vec!["superadmin".to_string()]);
         let additional = vec![req_set];
         assert!(!checker.verify_resource(&entitlements, "pages", "foo", "read", &additional));
+    }
+
+    #[test]
+    fn test_anonymous_vs_base() {
+        let checker = EntitlementsChecker::new(
+            vec!["anon:read".to_string()],
+            "bearer".to_string(),
+        )
+        .with_base_entitlements(vec!["base:read".to_string()]);
+
+        let mut authed = Entitlements::new();
+        authed.insert("bearer".to_string(), vec!["pages:foo:read".to_string()]);
+        let anonymous = Entitlements::new();
+
+        let need_anon = vec![{
+            let mut s = RequirementSet::new();
+            s.insert("bearer".to_string(), vec!["anon:read".to_string()]);
+            s
+        }];
+        let need_base = vec![{
+            let mut s = RequirementSet::new();
+            s.insert("bearer".to_string(), vec!["base:read".to_string()]);
+            s
+        }];
+
+        // Authed caller: base yes, anon no
+        assert!(checker.verify(&authed, &need_base));
+        assert!(!checker.verify(&authed, &need_anon));
+
+        // Anonymous caller: both
+        assert!(checker.verify(&anonymous, &need_base));
+        assert!(checker.verify(&anonymous, &need_anon));
+
+        // Authed caller with only an empty scheme list is still anonymous
+        let mut empty_list = Entitlements::new();
+        empty_list.insert("bearer".to_string(), vec![]);
+        assert!(checker.verify(&empty_list, &need_anon));
+
+        // Caller with entitlements in a different scheme is NOT anonymous
+        let mut other_scheme = Entitlements::new();
+        other_scheme.insert("oauth2".to_string(), vec!["scope1".to_string()]);
+        assert!(!checker.verify(&other_scheme, &need_anon));
+    }
+
+    #[test]
+    fn test_anonymous_vs_base_via_verify_resource() {
+        // Authed caller satisfies identity via base
+        let base_checker = EntitlementsChecker::new(vec![], "bearer".to_string())
+            .with_base_entitlements(vec!["pages:/foo:read".to_string()]);
+        let mut authed = Entitlements::new();
+        authed.insert("bearer".to_string(), vec!["other:read".to_string()]);
+        assert!(base_checker.verify_resource(&authed, "pages", "/foo", "read", &vec![]));
+
+        // Anonymous caller satisfies identity via base
+        let anonymous = Entitlements::new();
+        assert!(base_checker.verify_resource(&anonymous, "pages", "/foo", "read", &vec![]));
+
+        // Authed caller does NOT satisfy identity via anonymous bag
+        let anon_checker = EntitlementsChecker::new(
+            vec!["pages:/foo:read".to_string()],
+            "bearer".to_string(),
+        );
+        assert!(!anon_checker.verify_resource(&authed, "pages", "/foo", "read", &vec![]));
+
+        // Anonymous caller DOES satisfy identity via anonymous bag
+        assert!(anon_checker.verify_resource(&anonymous, "pages", "/foo", "read", &vec![]));
+    }
+
+    #[test]
+    fn test_with_base_entitlements_replaces() {
+        let checker = EntitlementsChecker::new(vec![], "bearer".to_string())
+            .with_base_entitlements(vec!["first:read".to_string()])
+            .with_base_entitlements(vec!["second:read".to_string()]);
+
+        let mut authed = Entitlements::new();
+        authed.insert("bearer".to_string(), vec!["pages:foo:read".to_string()]);
+
+        let need_first = vec![{
+            let mut s = RequirementSet::new();
+            s.insert("bearer".to_string(), vec!["first:read".to_string()]);
+            s
+        }];
+        let need_second = vec![{
+            let mut s = RequirementSet::new();
+            s.insert("bearer".to_string(), vec!["second:read".to_string()]);
+            s
+        }];
+
+        assert!(!checker.verify(&authed, &need_first));
+        assert!(checker.verify(&authed, &need_second));
     }
 }

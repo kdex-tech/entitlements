@@ -60,7 +60,12 @@ A list of maps representing alternative security requirement sets (OR'd). Within
 3. The overall verification succeeds if ANY requirement set is satisfied.
 
 ### Anonymous Entitlements
-An `EntitlementsChecker` can be configured with a list of "anonymous" patterns. These patterns are automatically granted to all users under the `defaultScheme`.
+An `EntitlementsChecker` can be configured with a list of "anonymous" patterns. These patterns are automatically granted to callers **only when the caller's `Entitlements` map is empty** (no schemes present, or every scheme's list is empty). They are applied under the `defaultScheme`. An authenticated caller — one who passes any entitlements at all — does **not** receive the anonymous bag.
+
+### Base Entitlements
+An `EntitlementsChecker` can additionally be configured with a list of "base" patterns via a builder-style setter (`WithBaseEntitlements` / `with_base_entitlements` / `withBaseEntitlements`). Base patterns are applied under the `defaultScheme` to **every** caller — authenticated or anonymous — and form a floor of grants that every request receives. Calling the setter again replaces the previous list.
+
+Use anonymous entitlements for grants that should only widen the unauthenticated surface. Use base entitlements for grants that should always apply regardless of caller identity.
 
 ### Resource-Specific Verification
 A specialized verification that automatically adds an "identity requirement" for a specific resource instance:
