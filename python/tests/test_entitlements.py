@@ -124,3 +124,5 @@ def test_base_entitlements_via_verify_resource():
     assert not anon_checker.verify_resource(
         {"bearer": ["other:read"]}, "pages", "/foo", "read"
     )
+    # Anonymous caller DOES satisfy identity via anonymous bag
+    assert anon_checker.verify_resource({}, "pages", "/foo", "read")
