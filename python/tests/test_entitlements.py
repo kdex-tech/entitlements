@@ -1,4 +1,4 @@
-from entitlements import EntitlementsChecker, Pattern
+from entitlements import EntitlementsChecker, Pattern, verify_attenuation
 
 def test_pattern_parse():
     assert Pattern.parse("pages:/foo:read") == Pattern(resource="pages", name="/foo", verb="read")
@@ -126,3 +126,37 @@ def test_base_entitlements_via_verify_resource():
     )
     # Anonymous caller DOES satisfy identity via anonymous bag
     assert anon_checker.verify_resource({}, "pages", "/foo", "read")
+
+
+def test_pattern_dominates():
+    cases = [
+        ("vector_stores::write", "vector_stores:X:write", True),  # held wildcard dominates specific
+        ("vector_stores:*:write", "vector_stores:X:write", True),  # explicit * on held side
+        ("vector_stores:X:write", "vector_stores:*:write", False),  # specific CANNOT widen to wildcard
+        ("vector_stores:X:write", "vector_stores::write", False),  # specific CANNOT widen to empty(*)
+        ("vector_stores:X:write", "vector_stores:X:write", True),  # exact
+        ("vector_stores:X:write", "vector_stores:Y:write", False),  # different resourceName
+        ("functions:/api/v1/files:all", "functions:/api/v1/files:write", True),  # verb all dominates
+        ("functions:/api/v1/files:write", "functions:/api/v1/files:all", False),  # requested all not dominated
+        ("functions:/x:write", "pages:/x:write", False),  # different resource
+        ("functions:/api/v1/files:read", "functions:/api/v1/files:write", False),  # different verb
+        ("admin", "admin", True),  # opaque exact
+        ("admin", "billing", False),  # opaque mismatch
+        ("functions:read", "functions:/api/v1/files:read", True),  # short held == functions:*:read
+    ]
+    for held, requested, want in cases:
+        hp = Pattern.parse(held)
+        rp = Pattern.parse(requested)
+        assert hp.dominates(rp) == want, f"dominates({held!r},{requested!r}) want {want}"
+
+
+def test_verify_attenuation():
+    # A SPECIFIC held grant cannot be widened to a wildcard request.
+    held = ["vector_stores:X:read"]
+    requested = ["vector_stores:X:read", "vector_stores:*:read"]
+    assert verify_attenuation(held, requested) == "vector_stores:*:read"
+
+    # Wildcard held (medium-form == vector_stores:*:read) dominates a specific request.
+    held2 = ["functions:/api/v1/files:write", "vector_stores::read"]
+    requested2 = ["functions:/api/v1/files:write", "vector_stores:X:read"]
+    assert verify_attenuation(held2, requested2) is None

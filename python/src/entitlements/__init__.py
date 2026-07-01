@@ -46,8 +46,54 @@ class Pattern:
         # Name must match exactly, or either is a wildcard
         if self.name != required.name and self.name not in ("*", "") and required.name not in ("*", ""):
             return False
-        
+
         return True
+
+    def dominates(self, requested: "Pattern") -> bool:
+        """Reports whether this pattern (as a HELD entitlement) is equal to or
+        BROADER than `requested`. This is the predicate for attenuation
+        (minting a token that carries a subset of the caller's authority).
+        Unlike `satisfies` (request-time matching), a wildcard resourceName is
+        honored ONLY on the held side: a specific grant cannot dominate a
+        wildcard request, so a mint can never broaden authority.
+
+        Opaque scopes dominate only by exact match.
+        """
+        # Both opaque: must match exactly
+        if self.opaque is not None and requested.opaque is not None:
+            return self.opaque == requested.opaque
+
+        # Mixed: never dominates
+        if (self.opaque is not None) != (requested.opaque is not None):
+            return False
+
+        # Resource type must match.
+        if self.resource != requested.resource:
+            return False
+
+        # Verb: held "all" dominates any; otherwise verbs must match. A
+        # requested "all" is NOT dominated by a specific held verb.
+        if self.verb != "all" and self.verb != requested.verb:
+            return False
+
+        # resourceName: a wildcard is honored ONLY on the held side.
+        if self.name in ("*", ""):
+            return True
+        return self.name == requested.name
+
+
+def verify_attenuation(held: List[str], requested: List[str]) -> Optional[str]:
+    """Returns `None` when every requested entitlement is dominated by at
+    least one held entitlement. Otherwise returns the first requested
+    entitlement (as its original string) that no held entitlement dominates.
+    """
+    held_patterns = [Pattern.parse(h) for h in held]
+    for req in requested:
+        req_pattern = Pattern.parse(req)
+        if not any(h.dominates(req_pattern) for h in held_patterns):
+            return req
+    return None
+
 
 class EntitlementsChecker:
     def __init__(self, anonymous_entitlements: Optional[List[str]] = None, default_scheme: str = "bearer"):
