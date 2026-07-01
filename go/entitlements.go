@@ -438,6 +438,70 @@ func isAnonymousCaller(entitlements map[string][]entitlementPattern) bool {
 	return true
 }
 
+// Dominates reports whether the held entitlement is equal to or BROADER than
+// the requested one under the kdex-entitlements grammar. This is the predicate
+// for attenuation (minting a token that carries a subset of the caller's
+// authority). Unlike request-time matching (entitlementMatches), a wildcard
+// resourceName is honored ONLY on the held side: a specific grant cannot
+// dominate a wildcard request, so a mint can never broaden authority.
+//
+// Opaque scopes (no ':') dominate only by exact match.
+func Dominates(held, requested string) bool {
+	if held == requested {
+		return true
+	}
+
+	hp := strings.Split(held, ":")
+	if len(hp) == 2 { // short form <resource>:<verb> == <resource>:*:<verb>
+		hp = []string{hp[0], "", hp[1]}
+	}
+	rp := strings.Split(requested, ":")
+	if len(rp) == 2 {
+		rp = []string{rp[0], "", rp[1]}
+	}
+
+	// Opaque or malformed: only exact match (handled above) dominates.
+	if len(hp) != 3 || len(rp) != 3 {
+		return false
+	}
+
+	// Resource type must match.
+	if hp[0] != rp[0] {
+		return false
+	}
+
+	// Verb: held "all" dominates any; otherwise verbs must match. A requested
+	// "all" is NOT dominated by a specific held verb.
+	if hp[2] != "all" && hp[2] != rp[2] {
+		return false
+	}
+
+	// resourceName: a wildcard is honored ONLY on the held side.
+	if hp[1] == "" || hp[1] == "*" {
+		return true
+	}
+	return hp[1] == rp[1]
+}
+
+// VerifyAttenuation returns ("", true) when every requested entitlement is
+// dominated by at least one held entitlement. Otherwise it returns the first
+// requested entitlement that no held entitlement dominates, and false.
+func VerifyAttenuation(held, requested []string) (offender string, ok bool) {
+	for _, req := range requested {
+		dominated := false
+		for _, h := range held {
+			if Dominates(h, req) {
+				dominated = true
+				break
+			}
+		}
+		if !dominated {
+			return req, false
+		}
+	}
+	return "", true
+}
+
 func (ep entitlementPattern) matches(req entitlementPattern) bool {
 	// Exact match is always the fastest path
 	if ep.raw == req.raw {

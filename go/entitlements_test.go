@@ -976,6 +976,46 @@ func BenchmarkVerifyResourceEntitlements(b *testing.B) {
 	}
 }
 
+func TestDominates(t *testing.T) {
+	cases := []struct {
+		held, requested string
+		want            bool
+	}{
+		{"vector_stores::write", "vector_stores:X:write", true},   // held wildcard dominates specific
+		{"vector_stores:*:write", "vector_stores:X:write", true},  // explicit * on held side
+		{"vector_stores:X:write", "vector_stores:*:write", false}, // specific CANNOT widen to wildcard
+		{"vector_stores:X:write", "vector_stores::write", false},  // specific CANNOT widen to empty(*)
+		{"vector_stores:X:write", "vector_stores:X:write", true},  // exact
+		{"vector_stores:X:write", "vector_stores:Y:write", false}, // different resourceName
+		{"functions:/api/v1/files:all", "functions:/api/v1/files:write", true},  // verb all dominates
+		{"functions:/api/v1/files:write", "functions:/api/v1/files:all", false}, // requested all not dominated
+		{"functions:/x:write", "pages:/x:write", false},                         // different resource
+		{"functions:/api/v1/files:read", "functions:/api/v1/files:write", false}, // different verb
+		{"admin", "admin", true},                                  // opaque exact
+		{"admin", "billing", false},                               // opaque mismatch
+		{"functions:read", "functions:/api/v1/files:read", true},  // short held == functions:*:read
+	}
+	for _, c := range cases {
+		if got := entitlements.Dominates(c.held, c.requested); got != c.want {
+			t.Errorf("Dominates(%q,%q)=%v want %v", c.held, c.requested, got, c.want)
+		}
+	}
+}
+
+func TestVerifyAttenuation(t *testing.T) {
+	// Wildcard held (medium-form == vector_stores:*:read) dominates a specific request.
+	held := []string{"functions:/api/v1/files:write", "vector_stores::read"}
+	if off, ok := entitlements.VerifyAttenuation(held, []string{"functions:/api/v1/files:write", "vector_stores:X:read"}); !ok {
+		t.Fatalf("expected ok, got offender %q", off)
+	}
+	// A SPECIFIC held grant cannot be widened to a wildcard request.
+	held2 := []string{"vector_stores:X:read"}
+	off, ok := entitlements.VerifyAttenuation(held2, []string{"vector_stores:X:read", "vector_stores:*:read"})
+	if ok || off != "vector_stores:*:read" {
+		t.Fatalf("expected reject on wildcard widen, got ok=%v offender=%q", ok, off)
+	}
+}
+
 func BenchmarkVerifyParsedEntitlements_Complex(b *testing.B) {
 	ec := entitlements.NewEntitlementsChecker([]string{"public:read"}, "bearer", false)
 	userEntitlements := entitlements.Entitlements{
