@@ -81,6 +81,67 @@ impl Pattern {
             _ => false,
         }
     }
+
+    /// Reports whether this pattern (as a HELD entitlement) is equal to or
+    /// BROADER than `requested`. This is the predicate for attenuation
+    /// (minting a token that carries a subset of the caller's authority).
+    /// Unlike `satisfies` (request-time matching), a wildcard resourceName is
+    /// honored ONLY on the held side: a specific grant cannot dominate a
+    /// wildcard request, so a mint can never broaden authority.
+    ///
+    /// Opaque scopes dominate only by exact match.
+    pub fn dominates(&self, requested: &Pattern) -> bool {
+        match (self, requested) {
+            (Self::Opaque(h), Self::Opaque(r)) => h == r,
+            (
+                Self::Structured {
+                    resource: hr,
+                    name: hn,
+                    verb: hv,
+                },
+                Self::Structured {
+                    resource: rr,
+                    name: rn,
+                    verb: rv,
+                },
+            ) => {
+                // Resource type must match.
+                if hr != rr {
+                    return false;
+                }
+
+                // Verb: held "all" dominates any; otherwise verbs must match.
+                // A requested "all" is NOT dominated by a specific held verb.
+                if hv != "all" && hv != rv {
+                    return false;
+                }
+
+                // resourceName: a wildcard is honored ONLY on the held side.
+                if hn.is_empty() || hn == "*" {
+                    return true;
+                }
+                hn == rn
+            }
+            // Mixed forms never dominate.
+            _ => false,
+        }
+    }
+
+    /// Returns `None` when every requested entitlement is dominated by at
+    /// least one held entitlement. Otherwise returns the first requested
+    /// entitlement (as its original string) that no held entitlement
+    /// dominates.
+    pub fn verify_attenuation(held: &[String], requested: &[String]) -> Option<String> {
+        let held_patterns: Vec<Pattern> = held.iter().map(|s| Pattern::parse(s)).collect();
+        for req in requested {
+            let req_pattern = Pattern::parse(req);
+            let dominated = held_patterns.iter().any(|h| h.dominates(&req_pattern));
+            if !dominated {
+                return Some(req.clone());
+            }
+        }
+        None
+    }
 }
 
 /// The main entitlements checker.
@@ -362,6 +423,60 @@ mod tests {
 
         // Anonymous caller DOES satisfy identity via anonymous bag
         assert!(anon_checker.verify_resource(&anonymous, "pages", "/foo", "read", &vec![]));
+    }
+
+    #[test]
+    fn test_dominates() {
+        let cases: Vec<(&str, &str, bool)> = vec![
+            ("vector_stores::write", "vector_stores:X:write", true), // held wildcard dominates specific
+            ("vector_stores:*:write", "vector_stores:X:write", true), // explicit * on held side
+            ("vector_stores:X:write", "vector_stores:*:write", false), // specific CANNOT widen to wildcard
+            ("vector_stores:X:write", "vector_stores::write", false), // specific CANNOT widen to empty(*)
+            ("vector_stores:X:write", "vector_stores:X:write", true), // exact
+            ("vector_stores:X:write", "vector_stores:Y:write", false), // different resourceName
+            ("functions:/api/v1/files:all", "functions:/api/v1/files:write", true), // verb all dominates
+            ("functions:/api/v1/files:write", "functions:/api/v1/files:all", false), // requested all not dominated
+            ("functions:/x:write", "pages:/x:write", false), // different resource
+            ("functions:/api/v1/files:read", "functions:/api/v1/files:write", false), // different verb
+            ("admin", "admin", true),    // opaque exact
+            ("admin", "billing", false), // opaque mismatch
+            ("functions:read", "functions:/api/v1/files:read", true), // short held == functions:*:read
+        ];
+
+        for (held, requested, want) in cases {
+            let hp = Pattern::parse(held);
+            let rp = Pattern::parse(requested);
+            assert_eq!(
+                hp.dominates(&rp),
+                want,
+                "Dominates({held:?},{requested:?}) want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_verify_attenuation() {
+        // A SPECIFIC held grant cannot be widened to a wildcard request.
+        let held = vec!["vector_stores:X:read".to_string()];
+        let requested = vec![
+            "vector_stores:X:read".to_string(),
+            "vector_stores:*:read".to_string(),
+        ];
+        assert_eq!(
+            Pattern::verify_attenuation(&held, &requested),
+            Some("vector_stores:*:read".to_string())
+        );
+
+        // Wildcard held (medium-form == vector_stores:*:read) dominates a specific request.
+        let held2 = vec![
+            "functions:/api/v1/files:write".to_string(),
+            "vector_stores::read".to_string(),
+        ];
+        let requested2 = vec![
+            "functions:/api/v1/files:write".to_string(),
+            "vector_stores:X:read".to_string(),
+        ];
+        assert_eq!(Pattern::verify_attenuation(&held2, &requested2), None);
     }
 
     #[test]
