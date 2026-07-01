@@ -83,6 +83,90 @@ function matches(ep: EntitlementPattern, req: EntitlementPattern): boolean {
   return ep.resourceName === req.resourceName;
 }
 
+function parsePattern(s: string): EntitlementPattern {
+  if (!s.includes(":")) {
+    return { raw: s, resource: "", resourceName: "", verb: "", isPattern: false };
+  }
+
+  const parts = s.split(":");
+  if (parts.length === 2) {
+    // Short syntax <resource>:<verb> == <resource>:*:<verb>.
+    return {
+      raw: s,
+      resource: parts[0]!,
+      resourceName: "",
+      verb: parts[1]!,
+      isPattern: true,
+    };
+  } else if (parts.length === 3) {
+    return {
+      raw: s,
+      resource: parts[0]!,
+      resourceName: parts[1]!,
+      verb: parts[2]!,
+      isPattern: true,
+    };
+  }
+
+  // Too many colons → treat as opaque (matches Go behavior).
+  return { raw: s, resource: "", resourceName: "", verb: "", isPattern: false };
+}
+
+/**
+ * Reports whether the held entitlement (`ep`) is equal to or BROADER than
+ * the requested one (`req`) under the kdex-entitlements grammar. This is the
+ * predicate for attenuation (minting a token that carries a subset of the
+ * caller's authority). Unlike request-time matching (`matches`), a wildcard
+ * resourceName is honored ONLY on the held side: a specific grant cannot
+ * dominate a wildcard request, so a mint can never broaden authority.
+ *
+ * Opaque scopes (no ':') dominate only by exact match.
+ */
+function dominates(ep: EntitlementPattern, req: EntitlementPattern): boolean {
+  if (ep.raw === req.raw) {
+    return true;
+  }
+
+  // Opaque or malformed: only exact match (handled above) dominates.
+  if (!ep.isPattern || !req.isPattern) {
+    return false;
+  }
+
+  // Resource type must match.
+  if (ep.resource !== req.resource) {
+    return false;
+  }
+
+  // Verb: held "all" dominates any; otherwise verbs must match. A requested
+  // "all" is NOT dominated by a specific held verb.
+  if (ep.verb !== "all" && ep.verb !== req.verb) {
+    return false;
+  }
+
+  // resourceName: a wildcard is honored ONLY on the held side.
+  if (ep.resourceName === "" || ep.resourceName === "*") {
+    return true;
+  }
+  return ep.resourceName === req.resourceName;
+}
+
+/**
+ * Returns `null` when every requested entitlement is dominated by at least
+ * one held entitlement. Otherwise returns the first requested entitlement
+ * that no held entitlement dominates.
+ */
+export function verifyAttenuation(held: string[], requested: string[]): string | null {
+  const heldPatterns = held.map((s) => parsePattern(s));
+  for (const req of requested) {
+    const reqPattern = parsePattern(req);
+    const dominated = heldPatterns.some((h) => dominates(h, reqPattern));
+    if (!dominated) {
+      return req;
+    }
+  }
+  return null;
+}
+
 function isAnonymousCallerPatterns(
   patterns: Record<string, EntitlementPattern[]>,
 ): boolean {
@@ -299,33 +383,7 @@ export class EntitlementsChecker {
       return cached;
     }
 
-    let p: EntitlementPattern;
-    if (!s.includes(":")) {
-      p = { raw: s, resource: "", resourceName: "", verb: "", isPattern: false };
-    } else {
-      const parts = s.split(":");
-      if (parts.length === 2) {
-        // Short syntax <resource>:<verb> == <resource>:*:<verb>.
-        p = {
-          raw: s,
-          resource: parts[0]!,
-          resourceName: "",
-          verb: parts[1]!,
-          isPattern: true,
-        };
-      } else if (parts.length === 3) {
-        p = {
-          raw: s,
-          resource: parts[0]!,
-          resourceName: parts[1]!,
-          verb: parts[2]!,
-          isPattern: true,
-        };
-      } else {
-        // Too many colons → treat as opaque (matches Go behavior).
-        p = { raw: s, resource: "", resourceName: "", verb: "", isPattern: false };
-      }
-    }
+    const p = parsePattern(s);
 
     if (this.cache.size < MAX_CACHE_SIZE) {
       this.cache.set(s, p);

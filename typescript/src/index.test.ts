@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   EntitlementsChecker,
+  verifyAttenuation,
   type Entitlements,
   type Requirements,
 } from "./index.js";
@@ -686,4 +687,122 @@ describe("calculateResourceRequirements", () => {
       ).toEqual(tc.want);
     });
   }
+});
+
+// dominates() is exercised indirectly through verifyAttenuation, mirroring
+// Go's TestDominates: held (single-element `held` list) dominates requested
+// iff verifyAttenuation returns null (i.e. no offender).
+interface DominatesCase {
+  name: string;
+  held: string;
+  requested: string;
+  want: boolean;
+}
+
+const dominatesCases: DominatesCase[] = [
+  {
+    name: "held wildcard (medium form) dominates specific",
+    held: "vector_stores::write",
+    requested: "vector_stores:X:write",
+    want: true,
+  },
+  {
+    name: "explicit * on held side dominates specific",
+    held: "vector_stores:*:write",
+    requested: "vector_stores:X:write",
+    want: true,
+  },
+  {
+    name: "specific CANNOT widen to wildcard requested",
+    held: "vector_stores:X:write",
+    requested: "vector_stores:*:write",
+    want: false,
+  },
+  {
+    name: "specific CANNOT widen to empty(*) requested",
+    held: "vector_stores:X:write",
+    requested: "vector_stores::write",
+    want: false,
+  },
+  {
+    name: "exact match dominates",
+    held: "vector_stores:X:write",
+    requested: "vector_stores:X:write",
+    want: true,
+  },
+  {
+    name: "different resourceName does not dominate",
+    held: "vector_stores:X:write",
+    requested: "vector_stores:Y:write",
+    want: false,
+  },
+  {
+    name: "verb all dominates specific verb",
+    held: "functions:/api/v1/files:all",
+    requested: "functions:/api/v1/files:write",
+    want: true,
+  },
+  {
+    name: "requested all is not dominated by specific held verb",
+    held: "functions:/api/v1/files:write",
+    requested: "functions:/api/v1/files:all",
+    want: false,
+  },
+  {
+    name: "different resource does not dominate",
+    held: "functions:/x:write",
+    requested: "pages:/x:write",
+    want: false,
+  },
+  {
+    name: "different verb does not dominate",
+    held: "functions:/api/v1/files:read",
+    requested: "functions:/api/v1/files:write",
+    want: false,
+  },
+  {
+    name: "opaque exact matches",
+    held: "admin",
+    requested: "admin",
+    want: true,
+  },
+  {
+    name: "opaque mismatch does not dominate",
+    held: "admin",
+    requested: "billing",
+    want: false,
+  },
+  {
+    name: "short held form == resource:*:verb",
+    held: "functions:read",
+    requested: "functions:/api/v1/files:read",
+    want: true,
+  },
+];
+
+describe("dominates (via verifyAttenuation)", () => {
+  for (const tc of dominatesCases) {
+    it(tc.name, () => {
+      const offender = verifyAttenuation([tc.held], [tc.requested]);
+      if (tc.want) {
+        expect(offender).toBeNull();
+      } else {
+        expect(offender).toBe(tc.requested);
+      }
+    });
+  }
+});
+
+describe("verifyAttenuation", () => {
+  it("allows a wildcard held (medium-form) to dominate a specific request", () => {
+    const held = ["functions:/api/v1/files:write", "vector_stores::read"];
+    const requested = ["functions:/api/v1/files:write", "vector_stores:X:read"];
+    expect(verifyAttenuation(held, requested)).toBeNull();
+  });
+
+  it("rejects widening a specific held grant to a wildcard request", () => {
+    const held = ["vector_stores:X:read"];
+    const requested = ["vector_stores:X:read", "vector_stores:*:read"];
+    expect(verifyAttenuation(held, requested)).toBe("vector_stores:*:read");
+  });
 });

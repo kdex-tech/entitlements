@@ -1,6 +1,6 @@
 {
   "name": "@kdex-tech/entitlements",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "KDex entitlements verification: claims-to-requirements matching with long/medium/short/opaque patterns.",
   "type": "module",
   "main": "dist/index.js",
