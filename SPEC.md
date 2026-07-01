@@ -59,6 +59,25 @@ A list of maps representing alternative security requirement sets (OR'd). Within
      - EVERY requirement string for that scheme is satisfied by at least one of the user's entitlement strings for that same scheme.
 3. The overall verification succeeds if ANY requirement set is satisfied.
 
+### Attenuation (Dominance)
+
+Attenuation is the inverse-direction check used when **minting a narrowed capability**: it decides whether a **held** entitlement is equal to or **broader than** a **requested** one, so a derived token can only reduce authority, never expand it. Unlike Pattern Matching (where a wildcard `<resourceName>` matches on **either** side), dominance honors a wildcard **only on the held side**.
+
+A held entitlement `H` **dominates** a requested entitlement `R` if and only if:
+
+1. `H` and `R` are the exact same string; or
+2. both are in opaque form and are equal; or
+3. both are in structured form and ALL of:
+   - `resource(H) == resource(R)`, AND
+   - `verb(H) == all` OR `verb(H) == verb(R)`, AND
+   - `resourceName(H)` is a wildcard (`*` or empty) OR `resourceName(H) == resourceName(R)`.
+
+Mixed opaque/structured forms never dominate. A **specific** held grant does NOT dominate a **wildcard** request (e.g. `vector_stores:X:write` does not dominate `vector_stores:*:write` or `vector_stores::write`) — this is what prevents privilege escalation during minting. A **wildcard** held grant DOES dominate a specific request. A held verb of `all` dominates any requested verb; a requested verb of `all` is dominated only by a held verb of `all`.
+
+`verifyAttenuation(held[], requested[])` returns the first requested entitlement not dominated by any held entitlement (or none / `null` if every requested entitlement is dominated).
+
+All language ports MUST produce identical results: Go `Dominates` / `VerifyAttenuation`, Rust `Pattern::dominates` / `verify_attenuation`, Python `Pattern.dominates` / `verify_attenuation`, TypeScript `dominates` / `verifyAttenuation`.
+
 ### Anonymous Entitlements
 An `EntitlementsChecker` can be configured with a list of "anonymous" patterns. These patterns are automatically granted to callers **only when the caller's `Entitlements` map is empty** (no schemes present, or every scheme's list is empty). They are applied under the `defaultScheme`. An authenticated caller — one who passes any entitlements at all — does **not** receive the anonymous bag.
 
