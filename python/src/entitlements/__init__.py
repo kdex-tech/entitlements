@@ -95,6 +95,33 @@ def verify_attenuation(held: List[str], requested: List[str]) -> Optional[str]:
     return None
 
 
+def compact(entitlements: List[str]) -> List[str]:
+    """Returns the subset of `entitlements` with every entry removed that is
+    strictly dominated by another entry, or that is an exact / equivalent-form
+    duplicate (e.g. "pages:read", "pages::read", "pages:*:read" collapse to the
+    first-seen one). The result grants exactly the same authority as the input;
+    survivors keep their original strings and their first-seen order.
+
+    Built purely on `Pattern.dominates`, so it can never drift from attenuation.
+    Opaque and malformed scopes collapse only by exact equality.
+    """
+    patterns = [Pattern.parse(e) for e in entitlements]
+    survivors: List[str] = []
+    survivor_patterns: List[Pattern] = []
+    for i, ep in enumerate(patterns):
+        strictly_dominated = any(
+            j != i and op.dominates(ep) and not ep.dominates(op)
+            for j, op in enumerate(patterns)
+        )
+        if strictly_dominated:
+            continue
+        if any(sp.dominates(ep) and ep.dominates(sp) for sp in survivor_patterns):
+            continue
+        survivors.append(entitlements[i])
+        survivor_patterns.append(ep)
+    return survivors
+
+
 class EntitlementsChecker:
     def __init__(self, anonymous_entitlements: Optional[List[str]] = None, default_scheme: str = "bearer"):
         self._anonymous_patterns: List[Pattern] = [

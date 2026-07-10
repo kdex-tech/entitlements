@@ -1,4 +1,4 @@
-from entitlements import EntitlementsChecker, Pattern, verify_attenuation
+from entitlements import EntitlementsChecker, Pattern, verify_attenuation, compact
 
 def test_pattern_parse():
     assert Pattern.parse("pages:/foo:read") == Pattern(resource="pages", name="/foo", verb="read")
@@ -160,3 +160,142 @@ def test_verify_attenuation():
     held2 = ["functions:/api/v1/files:write", "vector_stores::read"]
     requested2 = ["functions:/api/v1/files:write", "vector_stores:X:read"]
     assert verify_attenuation(held2, requested2) is None
+
+
+COMPACT_REAL_WORLD_INPUT = [
+    "functions:/v1/users:read",
+    "functions:/v1/users:create",
+    "functions:/v1/users:update",
+    "functions:/v1/users:delete",
+    "users:me:read",
+    "users:me:create",
+    "users:me:update",
+    "users:me:delete",
+    "apitokens::mint",
+    "apitokens::revoke",
+    "vector_stores:system:read",
+    "functions:/api/v1/vector_stores:read",
+    "functions:/api/v1/vector_stores:create",
+    "functions:/api/v1/vector_stores:update",
+    "functions:/api/v1/vector_stores:delete",
+    "functions:/api/v1/files:read",
+    "functions:/api/v1/files:create",
+    "functions:/api/v1/files:update",
+    "functions:/api/v1/files:delete",
+    "functions:/api/v1/search:read",
+    "functions:/api/v1/search:create",
+    "functions:/api/v1/search:update",
+    "functions:/api/v1/search:delete",
+    "functions:/api/v1/uploads:read",
+    "functions:/api/v1/uploads:create",
+    "functions:/api/v1/uploads:update",
+    "functions:/api/v1/uploads:delete",
+    "functions:/api/v1/ingest:read",
+    "functions:/api/v1/ingest:create",
+    "functions:/api/v1/ingest:update",
+    "functions:/api/v1/ingest:delete",
+    "functions:/api/v1/mcp:read",
+    "functions:/api/v1/mcp:create",
+    "functions:/api/v1/mcp:update",
+    "functions:/api/v1/mcp:delete",
+    "functions:/api/v1/events:read",
+    "functions:/api/v1/events:create",
+    "functions:/api/v1/events:update",
+    "functions:/api/v1/events:delete",
+    "functions:/tenant/v1:read",
+    "functions:/tenant/v1:create",
+    "functions:/tenant/v1:update",
+    "functions:/tenant/v1:delete",
+    "functions:/feedback/v1:read",
+    "functions:/feedback/v1:create",
+    "pages::read",
+    "functions::read",
+    "vector_stores:system:read",
+    "functions:/v1/chat:read",
+]
+
+COMPACT_REAL_WORLD_EXPECTED = [
+    "functions:/v1/users:create",
+    "functions:/v1/users:update",
+    "functions:/v1/users:delete",
+    "users:me:read",
+    "users:me:create",
+    "users:me:update",
+    "users:me:delete",
+    "apitokens::mint",
+    "apitokens::revoke",
+    "vector_stores:system:read",
+    "functions:/api/v1/vector_stores:create",
+    "functions:/api/v1/vector_stores:update",
+    "functions:/api/v1/vector_stores:delete",
+    "functions:/api/v1/files:create",
+    "functions:/api/v1/files:update",
+    "functions:/api/v1/files:delete",
+    "functions:/api/v1/search:create",
+    "functions:/api/v1/search:update",
+    "functions:/api/v1/search:delete",
+    "functions:/api/v1/uploads:create",
+    "functions:/api/v1/uploads:update",
+    "functions:/api/v1/uploads:delete",
+    "functions:/api/v1/ingest:create",
+    "functions:/api/v1/ingest:update",
+    "functions:/api/v1/ingest:delete",
+    "functions:/api/v1/mcp:create",
+    "functions:/api/v1/mcp:update",
+    "functions:/api/v1/mcp:delete",
+    "functions:/api/v1/events:create",
+    "functions:/api/v1/events:update",
+    "functions:/api/v1/events:delete",
+    "functions:/tenant/v1:create",
+    "functions:/tenant/v1:update",
+    "functions:/tenant/v1:delete",
+    "functions:/feedback/v1:create",
+    "pages::read",
+    "functions::read",
+]
+
+
+def test_compact_cases():
+    cases = [
+        ([], []),
+        (["x:/a:read"], ["x:/a:read"]),
+        (["x:*:read", "x:/a:read", "x:/b:read"], ["x:*:read"]),
+        (["x::read", "x:/a:read"], ["x::read"]),
+        (["x:/a:all", "x:/a:read"], ["x:/a:all"]),
+        (["pages:read", "pages::read", "pages:*:read"], ["pages:read"]),
+        (["x:/a:read", "x:/a:read"], ["x:/a:read"]),
+        (["admin", "admin", "email"], ["admin", "email"]),
+        (["functions", "functions::read"], ["functions", "functions::read"]),
+        (["functions::read", "vector_stores:system:read"], ["functions::read", "vector_stores:system:read"]),
+        (["functions::read", "functions:/a:create"], ["functions::read", "functions:/a:create"]),
+        (["x:/a:read", "x:/b:create"], ["x:/a:read", "x:/b:create"]),
+    ]
+    for given, want in cases:
+        assert compact(given) == want, f"input: {given}"
+
+
+def test_compact_real_world_array():
+    got = compact(COMPACT_REAL_WORLD_INPUT)
+    assert len(got) == 37
+    assert got == COMPACT_REAL_WORLD_EXPECTED
+    assert len(COMPACT_REAL_WORLD_INPUT) == 49  # input not mutated
+
+
+def test_compact_idempotent():
+    once = compact(COMPACT_REAL_WORLD_INPUT)
+    assert compact(once) == once
+
+
+def test_compact_preserves_authority():
+    checker = EntitlementsChecker([], "bearer")
+    compacted = compact(COMPACT_REAL_WORLD_INPUT)
+    for req, want in [
+        ("functions:/api/v1/files:read", True),
+        ("functions:/api/v1/files:delete", True),
+        ("billing::read", False),
+    ]:
+        reqs = [{"bearer": [req]}]
+        orig = checker.verify({"bearer": COMPACT_REAL_WORLD_INPUT}, reqs)
+        comp = checker.verify({"bearer": compacted}, reqs)
+        assert orig == want, f"original result for {req}"
+        assert orig == comp, f"authority equivalence for {req}"
