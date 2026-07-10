@@ -78,6 +78,34 @@ Mixed opaque/structured forms never dominate. A **specific** held grant does NOT
 
 All language ports MUST produce identical results: Go `Dominates` / `VerifyAttenuation`, Rust `Pattern::dominates` / `verify_attenuation`, Python `Pattern.dominates` / `verify_attenuation`, TypeScript `dominates` / `verifyAttenuation`.
 
+### Compaction
+
+Compaction prunes an entitlement **array** to the minimal set that grants the
+same authority. It is the array-normalization counterpart to attenuation: use it
+to shrink a caller's grant list before minting a narrowed token, persisting it,
+or embedding it in a claim.
+
+`Compact(entitlements[])` returns the subset with every entry removed that is
+**strictly dominated** by another entry (some other entry dominates it and it
+does not dominate that entry back), plus exact and equivalent-form duplicates
+(e.g. `pages:read`, `pages::read`, and `pages:*:read` collapse to one). It is
+defined purely in terms of the dominance relation above — never request-time
+matching — so a wider grant (`functions::read`) prunes the narrower ones it
+covers (`functions:/api/v1/files:read`) but never the reverse.
+
+Guarantees:
+- **Authority-preserving (lossless).** The compacted array authorizes exactly
+  the same requests as the input; no wider scope is ever synthesized.
+- **Order-preserving.** Survivors appear in first-seen order, with their
+  original strings unchanged.
+- **Idempotent.** `Compact(Compact(x))` equals `Compact(x)`.
+
+Opaque and malformed scopes collapse only by exact equality, consistent with
+dominance.
+
+All language ports MUST produce identical results: Go `Compact`, Rust
+`Pattern::compact`, Python `compact`, TypeScript `compact`.
+
 ### Anonymous Entitlements
 An `EntitlementsChecker` can be configured with a list of "anonymous" patterns. These patterns are automatically granted to callers **only when the caller's `Entitlements` map is empty** (no schemes present, or every scheme's list is empty). They are applied under the `defaultScheme`. An authenticated caller — one who passes any entitlements at all — does **not** receive the anonymous bag.
 
