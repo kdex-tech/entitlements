@@ -167,6 +167,43 @@ export function verifyAttenuation(held: string[], requested: string[]): string |
   return null;
 }
 
+/**
+ * Returns the subset of `entitlements` with every entry removed that is
+ * strictly dominated by another entry, or that is an exact / equivalent-form
+ * duplicate (e.g. "pages:read", "pages::read", "pages:*:read" collapse to the
+ * first-seen one). The result grants exactly the same authority as the input;
+ * survivors keep their original strings and their first-seen order.
+ *
+ * Built purely on `dominates`, so it can never drift from attenuation. Opaque
+ * and malformed scopes collapse only by exact equality.
+ */
+export function compact(entitlements: string[]): string[] {
+  const patterns = entitlements.map((s) => parsePattern(s));
+  const survivors: string[] = [];
+  const survivorPatterns: EntitlementPattern[] = [];
+  for (let i = 0; i < patterns.length; i++) {
+    const ep = patterns[i]!;
+    // (1) Drop if some OTHER entry strictly dominates it.
+    let strictlyDominated = false;
+    for (let j = 0; j < patterns.length; j++) {
+      if (i === j) continue;
+      const op = patterns[j]!;
+      if (dominates(op, ep) && !dominates(ep, op)) {
+        strictlyDominated = true;
+        break;
+      }
+    }
+    if (strictlyDominated) continue;
+    // (2) Maximal; keep unless an equivalent survivor already present.
+    const dup = survivorPatterns.some((sp) => dominates(sp, ep) && dominates(ep, sp));
+    if (!dup) {
+      survivors.push(entitlements[i]!);
+      survivorPatterns.push(ep);
+    }
+  }
+  return survivors;
+}
+
 function isAnonymousCallerPatterns(
   patterns: Record<string, EntitlementPattern[]>,
 ): boolean {

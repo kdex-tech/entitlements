@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   EntitlementsChecker,
   verifyAttenuation,
+  compact,
   type Entitlements,
   type Requirements,
 } from "./index.js";
@@ -804,5 +805,148 @@ describe("verifyAttenuation", () => {
     const held = ["vector_stores:X:read"];
     const requested = ["vector_stores:X:read", "vector_stores:*:read"];
     expect(verifyAttenuation(held, requested)).toBe("vector_stores:*:read");
+  });
+});
+
+const compactRealWorldInput = [
+  "functions:/v1/users:read",
+  "functions:/v1/users:create",
+  "functions:/v1/users:update",
+  "functions:/v1/users:delete",
+  "users:me:read",
+  "users:me:create",
+  "users:me:update",
+  "users:me:delete",
+  "apitokens::mint",
+  "apitokens::revoke",
+  "vector_stores:system:read",
+  "functions:/api/v1/vector_stores:read",
+  "functions:/api/v1/vector_stores:create",
+  "functions:/api/v1/vector_stores:update",
+  "functions:/api/v1/vector_stores:delete",
+  "functions:/api/v1/files:read",
+  "functions:/api/v1/files:create",
+  "functions:/api/v1/files:update",
+  "functions:/api/v1/files:delete",
+  "functions:/api/v1/search:read",
+  "functions:/api/v1/search:create",
+  "functions:/api/v1/search:update",
+  "functions:/api/v1/search:delete",
+  "functions:/api/v1/uploads:read",
+  "functions:/api/v1/uploads:create",
+  "functions:/api/v1/uploads:update",
+  "functions:/api/v1/uploads:delete",
+  "functions:/api/v1/ingest:read",
+  "functions:/api/v1/ingest:create",
+  "functions:/api/v1/ingest:update",
+  "functions:/api/v1/ingest:delete",
+  "functions:/api/v1/mcp:read",
+  "functions:/api/v1/mcp:create",
+  "functions:/api/v1/mcp:update",
+  "functions:/api/v1/mcp:delete",
+  "functions:/api/v1/events:read",
+  "functions:/api/v1/events:create",
+  "functions:/api/v1/events:update",
+  "functions:/api/v1/events:delete",
+  "functions:/tenant/v1:read",
+  "functions:/tenant/v1:create",
+  "functions:/tenant/v1:update",
+  "functions:/tenant/v1:delete",
+  "functions:/feedback/v1:read",
+  "functions:/feedback/v1:create",
+  "pages::read",
+  "functions::read",
+  "vector_stores:system:read",
+  "functions:/v1/chat:read",
+];
+
+const compactRealWorldExpected = [
+  "functions:/v1/users:create",
+  "functions:/v1/users:update",
+  "functions:/v1/users:delete",
+  "users:me:read",
+  "users:me:create",
+  "users:me:update",
+  "users:me:delete",
+  "apitokens::mint",
+  "apitokens::revoke",
+  "vector_stores:system:read",
+  "functions:/api/v1/vector_stores:create",
+  "functions:/api/v1/vector_stores:update",
+  "functions:/api/v1/vector_stores:delete",
+  "functions:/api/v1/files:create",
+  "functions:/api/v1/files:update",
+  "functions:/api/v1/files:delete",
+  "functions:/api/v1/search:create",
+  "functions:/api/v1/search:update",
+  "functions:/api/v1/search:delete",
+  "functions:/api/v1/uploads:create",
+  "functions:/api/v1/uploads:update",
+  "functions:/api/v1/uploads:delete",
+  "functions:/api/v1/ingest:create",
+  "functions:/api/v1/ingest:update",
+  "functions:/api/v1/ingest:delete",
+  "functions:/api/v1/mcp:create",
+  "functions:/api/v1/mcp:update",
+  "functions:/api/v1/mcp:delete",
+  "functions:/api/v1/events:create",
+  "functions:/api/v1/events:update",
+  "functions:/api/v1/events:delete",
+  "functions:/tenant/v1:create",
+  "functions:/tenant/v1:update",
+  "functions:/tenant/v1:delete",
+  "functions:/feedback/v1:create",
+  "pages::read",
+  "functions::read",
+];
+
+describe("compact", () => {
+  const cases: Array<{ name: string; in: string[]; want: string[] }> = [
+    { name: "empty", in: [], want: [] },
+    { name: "single", in: ["x:/a:read"], want: ["x:/a:read"] },
+    { name: "wildcard prunes specifics", in: ["x:*:read", "x:/a:read", "x:/b:read"], want: ["x:*:read"] },
+    { name: "medium form prunes specifics", in: ["x::read", "x:/a:read"], want: ["x::read"] },
+    { name: "all-verb prunes read", in: ["x:/a:all", "x:/a:read"], want: ["x:/a:all"] },
+    { name: "equivalent forms collapse", in: ["pages:read", "pages::read", "pages:*:read"], want: ["pages:read"] },
+    { name: "exact dup dedup", in: ["x:/a:read", "x:/a:read"], want: ["x:/a:read"] },
+    { name: "opaque dedup", in: ["admin", "admin", "email"], want: ["admin", "email"] },
+    { name: "opaque never dominates structured", in: ["functions", "functions::read"], want: ["functions", "functions::read"] },
+    { name: "cross-resource kept", in: ["functions::read", "vector_stores:system:read"], want: ["functions::read", "vector_stores:system:read"] },
+    { name: "verb non-interference", in: ["functions::read", "functions:/a:create"], want: ["functions::read", "functions:/a:create"] },
+    { name: "no redundancy preserves order", in: ["x:/a:read", "x:/b:create"], want: ["x:/a:read", "x:/b:create"] },
+  ];
+  for (const tc of cases) {
+    it(tc.name, () => {
+      expect(compact(tc.in)).toEqual(tc.want);
+    });
+  }
+
+  it("compacts the real-world array 49 -> 37", () => {
+    const got = compact(compactRealWorldInput);
+    expect(got).toHaveLength(37);
+    expect(got).toEqual(compactRealWorldExpected);
+    expect(compactRealWorldInput).toHaveLength(49); // input not mutated
+  });
+
+  it("is idempotent", () => {
+    const once = compact(compactRealWorldInput);
+    expect(compact(once)).toEqual(once);
+  });
+
+  it("preserves authority", () => {
+    const checker = new EntitlementsChecker(undefined, "bearer", false);
+    const compacted = compact(compactRealWorldInput);
+    const probes: Array<[string, boolean]> = [
+      ["functions:/api/v1/files:read", true],
+      ["functions:/api/v1/files:delete", true],
+      ["billing::read", false],
+    ];
+    for (const [req, want] of probes) {
+      const reqs: Requirements = [{ bearer: [req] }];
+      const orig = checker.verifyEntitlements({ bearer: compactRealWorldInput }, reqs);
+      const comp = checker.verifyEntitlements({ bearer: compacted }, reqs);
+      expect(orig).toBe(want);
+      expect(comp).toBe(orig);
+    }
   });
 });
