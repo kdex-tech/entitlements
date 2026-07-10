@@ -142,6 +142,40 @@ impl Pattern {
         }
         None
     }
+
+    /// Returns the subset of `entitlements` with every entry removed that is
+    /// strictly dominated by another entry, or that is an exact /
+    /// equivalent-form duplicate (e.g. "pages:read", "pages::read",
+    /// "pages:*:read" collapse to the first-seen one). The result grants
+    /// exactly the same authority as the input; survivors keep their original
+    /// strings and their first-seen order.
+    ///
+    /// Built purely on `dominates`, so it can never drift from attenuation.
+    /// Opaque and malformed scopes collapse only by exact equality.
+    pub fn compact(entitlements: &[String]) -> Vec<String> {
+        let patterns: Vec<Pattern> = entitlements.iter().map(|s| Pattern::parse(s)).collect();
+        let mut survivors: Vec<String> = Vec::new();
+        let mut survivor_patterns: Vec<Pattern> = Vec::new();
+        for (i, ep) in patterns.iter().enumerate() {
+            // (1) Drop if some OTHER entry strictly dominates it.
+            let strictly_dominated = patterns
+                .iter()
+                .enumerate()
+                .any(|(j, op)| i != j && op.dominates(ep) && !ep.dominates(op));
+            if strictly_dominated {
+                continue;
+            }
+            // (2) Maximal; keep unless an equivalent survivor already present.
+            let dup = survivor_patterns
+                .iter()
+                .any(|sp| sp.dominates(ep) && ep.dominates(sp));
+            if !dup {
+                survivors.push(entitlements[i].clone());
+                survivor_patterns.push(ep.clone());
+            }
+        }
+        survivors
+    }
 }
 
 /// The main entitlements checker.
@@ -501,5 +535,172 @@ mod tests {
 
         assert!(!checker.verify(&authed, &need_first));
         assert!(checker.verify(&authed, &need_second));
+    }
+
+    fn compact_real_world_input() -> Vec<String> {
+        [
+            "functions:/v1/users:read",
+            "functions:/v1/users:create",
+            "functions:/v1/users:update",
+            "functions:/v1/users:delete",
+            "users:me:read",
+            "users:me:create",
+            "users:me:update",
+            "users:me:delete",
+            "apitokens::mint",
+            "apitokens::revoke",
+            "vector_stores:system:read",
+            "functions:/api/v1/vector_stores:read",
+            "functions:/api/v1/vector_stores:create",
+            "functions:/api/v1/vector_stores:update",
+            "functions:/api/v1/vector_stores:delete",
+            "functions:/api/v1/files:read",
+            "functions:/api/v1/files:create",
+            "functions:/api/v1/files:update",
+            "functions:/api/v1/files:delete",
+            "functions:/api/v1/search:read",
+            "functions:/api/v1/search:create",
+            "functions:/api/v1/search:update",
+            "functions:/api/v1/search:delete",
+            "functions:/api/v1/uploads:read",
+            "functions:/api/v1/uploads:create",
+            "functions:/api/v1/uploads:update",
+            "functions:/api/v1/uploads:delete",
+            "functions:/api/v1/ingest:read",
+            "functions:/api/v1/ingest:create",
+            "functions:/api/v1/ingest:update",
+            "functions:/api/v1/ingest:delete",
+            "functions:/api/v1/mcp:read",
+            "functions:/api/v1/mcp:create",
+            "functions:/api/v1/mcp:update",
+            "functions:/api/v1/mcp:delete",
+            "functions:/api/v1/events:read",
+            "functions:/api/v1/events:create",
+            "functions:/api/v1/events:update",
+            "functions:/api/v1/events:delete",
+            "functions:/tenant/v1:read",
+            "functions:/tenant/v1:create",
+            "functions:/tenant/v1:update",
+            "functions:/tenant/v1:delete",
+            "functions:/feedback/v1:read",
+            "functions:/feedback/v1:create",
+            "pages::read",
+            "functions::read",
+            "vector_stores:system:read",
+            "functions:/v1/chat:read",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
+    fn compact_real_world_expected() -> Vec<String> {
+        [
+            "functions:/v1/users:create",
+            "functions:/v1/users:update",
+            "functions:/v1/users:delete",
+            "users:me:read",
+            "users:me:create",
+            "users:me:update",
+            "users:me:delete",
+            "apitokens::mint",
+            "apitokens::revoke",
+            "vector_stores:system:read",
+            "functions:/api/v1/vector_stores:create",
+            "functions:/api/v1/vector_stores:update",
+            "functions:/api/v1/vector_stores:delete",
+            "functions:/api/v1/files:create",
+            "functions:/api/v1/files:update",
+            "functions:/api/v1/files:delete",
+            "functions:/api/v1/search:create",
+            "functions:/api/v1/search:update",
+            "functions:/api/v1/search:delete",
+            "functions:/api/v1/uploads:create",
+            "functions:/api/v1/uploads:update",
+            "functions:/api/v1/uploads:delete",
+            "functions:/api/v1/ingest:create",
+            "functions:/api/v1/ingest:update",
+            "functions:/api/v1/ingest:delete",
+            "functions:/api/v1/mcp:create",
+            "functions:/api/v1/mcp:update",
+            "functions:/api/v1/mcp:delete",
+            "functions:/api/v1/events:create",
+            "functions:/api/v1/events:update",
+            "functions:/api/v1/events:delete",
+            "functions:/tenant/v1:create",
+            "functions:/tenant/v1:update",
+            "functions:/tenant/v1:delete",
+            "functions:/feedback/v1:create",
+            "pages::read",
+            "functions::read",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_compact_cases() {
+        let cases: Vec<(Vec<String>, Vec<String>)> = vec![
+            (strs(&[]), strs(&[])),
+            (strs(&["x:/a:read"]), strs(&["x:/a:read"])),
+            (strs(&["x:*:read", "x:/a:read", "x:/b:read"]), strs(&["x:*:read"])),
+            (strs(&["x::read", "x:/a:read"]), strs(&["x::read"])),
+            (strs(&["x:/a:all", "x:/a:read"]), strs(&["x:/a:all"])),
+            (strs(&["pages:read", "pages::read", "pages:*:read"]), strs(&["pages:read"])),
+            (strs(&["x:/a:read", "x:/a:read"]), strs(&["x:/a:read"])),
+            (strs(&["admin", "admin", "email"]), strs(&["admin", "email"])),
+            (strs(&["functions", "functions::read"]), strs(&["functions", "functions::read"])),
+            (strs(&["functions::read", "vector_stores:system:read"]), strs(&["functions::read", "vector_stores:system:read"])),
+            (strs(&["functions::read", "functions:/a:create"]), strs(&["functions::read", "functions:/a:create"])),
+            (strs(&["x:/a:read", "x:/b:create"]), strs(&["x:/a:read", "x:/b:create"])),
+        ];
+        for (input, want) in cases {
+            assert_eq!(Pattern::compact(&input), want, "input: {:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_compact_real_world_array() {
+        let input = compact_real_world_input();
+        let got = Pattern::compact(&input);
+        assert_eq!(got.len(), 37);
+        assert_eq!(got, compact_real_world_expected());
+        assert_eq!(input.len(), 49); // input not mutated
+    }
+
+    #[test]
+    fn test_compact_idempotent() {
+        let once = Pattern::compact(&compact_real_world_input());
+        let twice = Pattern::compact(&once);
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn test_compact_preserves_authority() {
+        let checker = EntitlementsChecker::new(vec![], "bearer".to_string());
+        let input = compact_real_world_input();
+        let compacted = Pattern::compact(&input);
+        let probes: Vec<(&str, bool)> = vec![
+            ("functions:/api/v1/files:read", true),
+            ("functions:/api/v1/files:delete", true),
+            ("billing::read", false),
+        ];
+        for (req, want) in probes {
+            let reqs: Requirements =
+                vec![HashMap::from([("bearer".to_string(), vec![req.to_string()])])];
+            let ents_orig: Entitlements =
+                HashMap::from([("bearer".to_string(), input.clone())]);
+            let ents_comp: Entitlements =
+                HashMap::from([("bearer".to_string(), compacted.clone())]);
+            let orig = checker.verify(&ents_orig, &reqs);
+            let comp = checker.verify(&ents_comp, &reqs);
+            assert_eq!(orig, want, "original result for {req}");
+            assert_eq!(orig, comp, "authority equivalence for {req}");
+        }
     }
 }
