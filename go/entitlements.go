@@ -502,6 +502,50 @@ func VerifyAttenuation(held, requested []string) (offender string, ok bool) {
 	return "", true
 }
 
+// Compact returns the subset of entitlements with every entry removed that is
+// strictly dominated by another entry, or that is an exact / equivalent-form
+// duplicate (e.g. "pages:read", "pages::read", "pages:*:read" collapse to the
+// first-seen one). The result grants exactly the same authority as the input;
+// surviving entries keep their original strings and their first-seen order.
+//
+// It is defined purely in terms of Dominates, so its notion of "broader than"
+// can never drift from attenuation. Opaque and malformed scopes collapse only
+// by exact equality. Compaction is intended for preparing an entitlement array
+// (e.g. before minting a narrowed token); it does not consult the checker's
+// anonymous/base patterns or the intern cache.
+func Compact(entitlements []string) []string {
+	survivors := make([]string, 0, len(entitlements))
+	for i, e := range entitlements {
+		// (1) Drop e if some OTHER entry strictly dominates it.
+		strictlyDominated := false
+		for j, o := range entitlements {
+			if i == j {
+				continue
+			}
+			if Dominates(o, e) && !Dominates(e, o) {
+				strictlyDominated = true
+				break
+			}
+		}
+		if strictlyDominated {
+			continue
+		}
+		// (2) e is maximal; keep it unless an equivalent survivor is already
+		// present (exact dup or equal form, i.e. mutual dominance).
+		dup := false
+		for _, s := range survivors {
+			if Dominates(s, e) && Dominates(e, s) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			survivors = append(survivors, e)
+		}
+	}
+	return survivors
+}
+
 func (ep entitlementPattern) matches(req entitlementPattern) bool {
 	// Exact match is always the fastest path
 	if ep.raw == req.raw {

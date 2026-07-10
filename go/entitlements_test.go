@@ -981,19 +981,19 @@ func TestDominates(t *testing.T) {
 		held, requested string
 		want            bool
 	}{
-		{"vector_stores::write", "vector_stores:X:write", true},   // held wildcard dominates specific
-		{"vector_stores:*:write", "vector_stores:X:write", true},  // explicit * on held side
-		{"vector_stores:X:write", "vector_stores:*:write", false}, // specific CANNOT widen to wildcard
-		{"vector_stores:X:write", "vector_stores::write", false},  // specific CANNOT widen to empty(*)
-		{"vector_stores:X:write", "vector_stores:X:write", true},  // exact
-		{"vector_stores:X:write", "vector_stores:Y:write", false}, // different resourceName
-		{"functions:/api/v1/files:all", "functions:/api/v1/files:write", true},  // verb all dominates
-		{"functions:/api/v1/files:write", "functions:/api/v1/files:all", false}, // requested all not dominated
-		{"functions:/x:write", "pages:/x:write", false},                         // different resource
+		{"vector_stores::write", "vector_stores:X:write", true},                  // held wildcard dominates specific
+		{"vector_stores:*:write", "vector_stores:X:write", true},                 // explicit * on held side
+		{"vector_stores:X:write", "vector_stores:*:write", false},                // specific CANNOT widen to wildcard
+		{"vector_stores:X:write", "vector_stores::write", false},                 // specific CANNOT widen to empty(*)
+		{"vector_stores:X:write", "vector_stores:X:write", true},                 // exact
+		{"vector_stores:X:write", "vector_stores:Y:write", false},                // different resourceName
+		{"functions:/api/v1/files:all", "functions:/api/v1/files:write", true},   // verb all dominates
+		{"functions:/api/v1/files:write", "functions:/api/v1/files:all", false},  // requested all not dominated
+		{"functions:/x:write", "pages:/x:write", false},                          // different resource
 		{"functions:/api/v1/files:read", "functions:/api/v1/files:write", false}, // different verb
-		{"admin", "admin", true},                                  // opaque exact
-		{"admin", "billing", false},                               // opaque mismatch
-		{"functions:read", "functions:/api/v1/files:read", true},  // short held == functions:*:read
+		{"admin", "admin", true},                                                 // opaque exact
+		{"admin", "billing", false},                                              // opaque mismatch
+		{"functions:read", "functions:/api/v1/files:read", true},                 // short held == functions:*:read
 	}
 	for _, c := range cases {
 		if got := entitlements.Dominates(c.held, c.requested); got != c.want {
@@ -1034,5 +1034,158 @@ func BenchmarkVerifyParsedEntitlements_Complex(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ec.VerifyParsedEntitlements(parsedEntitlements, parsedReqs)
+	}
+}
+
+var compactRealWorldInput = []string{
+	"functions:/v1/users:read",
+	"functions:/v1/users:create",
+	"functions:/v1/users:update",
+	"functions:/v1/users:delete",
+	"users:me:read",
+	"users:me:create",
+	"users:me:update",
+	"users:me:delete",
+	"apitokens::mint",
+	"apitokens::revoke",
+	"vector_stores:system:read",
+	"functions:/api/v1/vector_stores:read",
+	"functions:/api/v1/vector_stores:create",
+	"functions:/api/v1/vector_stores:update",
+	"functions:/api/v1/vector_stores:delete",
+	"functions:/api/v1/files:read",
+	"functions:/api/v1/files:create",
+	"functions:/api/v1/files:update",
+	"functions:/api/v1/files:delete",
+	"functions:/api/v1/search:read",
+	"functions:/api/v1/search:create",
+	"functions:/api/v1/search:update",
+	"functions:/api/v1/search:delete",
+	"functions:/api/v1/uploads:read",
+	"functions:/api/v1/uploads:create",
+	"functions:/api/v1/uploads:update",
+	"functions:/api/v1/uploads:delete",
+	"functions:/api/v1/ingest:read",
+	"functions:/api/v1/ingest:create",
+	"functions:/api/v1/ingest:update",
+	"functions:/api/v1/ingest:delete",
+	"functions:/api/v1/mcp:read",
+	"functions:/api/v1/mcp:create",
+	"functions:/api/v1/mcp:update",
+	"functions:/api/v1/mcp:delete",
+	"functions:/api/v1/events:read",
+	"functions:/api/v1/events:create",
+	"functions:/api/v1/events:update",
+	"functions:/api/v1/events:delete",
+	"functions:/tenant/v1:read",
+	"functions:/tenant/v1:create",
+	"functions:/tenant/v1:update",
+	"functions:/tenant/v1:delete",
+	"functions:/feedback/v1:read",
+	"functions:/feedback/v1:create",
+	"pages::read",
+	"functions::read",
+	"vector_stores:system:read",
+	"functions:/v1/chat:read",
+}
+
+var compactRealWorldExpected = []string{
+	"functions:/v1/users:create",
+	"functions:/v1/users:update",
+	"functions:/v1/users:delete",
+	"users:me:read",
+	"users:me:create",
+	"users:me:update",
+	"users:me:delete",
+	"apitokens::mint",
+	"apitokens::revoke",
+	"vector_stores:system:read",
+	"functions:/api/v1/vector_stores:create",
+	"functions:/api/v1/vector_stores:update",
+	"functions:/api/v1/vector_stores:delete",
+	"functions:/api/v1/files:create",
+	"functions:/api/v1/files:update",
+	"functions:/api/v1/files:delete",
+	"functions:/api/v1/search:create",
+	"functions:/api/v1/search:update",
+	"functions:/api/v1/search:delete",
+	"functions:/api/v1/uploads:create",
+	"functions:/api/v1/uploads:update",
+	"functions:/api/v1/uploads:delete",
+	"functions:/api/v1/ingest:create",
+	"functions:/api/v1/ingest:update",
+	"functions:/api/v1/ingest:delete",
+	"functions:/api/v1/mcp:create",
+	"functions:/api/v1/mcp:update",
+	"functions:/api/v1/mcp:delete",
+	"functions:/api/v1/events:create",
+	"functions:/api/v1/events:update",
+	"functions:/api/v1/events:delete",
+	"functions:/tenant/v1:create",
+	"functions:/tenant/v1:update",
+	"functions:/tenant/v1:delete",
+	"functions:/feedback/v1:create",
+	"pages::read",
+	"functions::read",
+}
+
+func TestCompact(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"empty", []string{}, []string{}},
+		{"single", []string{"x:/a:read"}, []string{"x:/a:read"}},
+		{"wildcard prunes specifics", []string{"x:*:read", "x:/a:read", "x:/b:read"}, []string{"x:*:read"}},
+		{"medium form prunes specifics", []string{"x::read", "x:/a:read"}, []string{"x::read"}},
+		{"all-verb prunes read", []string{"x:/a:all", "x:/a:read"}, []string{"x:/a:all"}},
+		{"equivalent forms collapse first-seen", []string{"pages:read", "pages::read", "pages:*:read"}, []string{"pages:read"}},
+		{"exact dup dedup", []string{"x:/a:read", "x:/a:read"}, []string{"x:/a:read"}},
+		{"opaque dedup", []string{"admin", "admin", "email"}, []string{"admin", "email"}},
+		{"opaque never dominates structured", []string{"functions", "functions::read"}, []string{"functions", "functions::read"}},
+		{"cross-resource kept", []string{"functions::read", "vector_stores:system:read"}, []string{"functions::read", "vector_stores:system:read"}},
+		{"verb non-interference", []string{"functions::read", "functions:/a:create"}, []string{"functions::read", "functions:/a:create"}},
+		{"no redundancy preserves order", []string{"x:/a:read", "x:/b:create"}, []string{"x:/a:read", "x:/b:create"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, entitlements.Compact(tc.in))
+		})
+	}
+}
+
+func TestCompactRealWorldArray(t *testing.T) {
+	got := entitlements.Compact(compactRealWorldInput)
+	assert.Len(t, got, 37)
+	assert.Equal(t, compactRealWorldExpected, got)
+	// input must not be mutated
+	assert.Len(t, compactRealWorldInput, 49)
+}
+
+func TestCompactIdempotent(t *testing.T) {
+	once := entitlements.Compact(compactRealWorldInput)
+	twice := entitlements.Compact(once)
+	assert.Equal(t, once, twice)
+}
+
+func TestCompactPreservesAuthority(t *testing.T) {
+	ec := entitlements.NewEntitlementsChecker(nil, "bearer", false)
+	compacted := entitlements.Compact(compactRealWorldInput)
+	probes := []struct {
+		name string
+		req  string
+		want bool
+	}{
+		{"dominated read still granted", "functions:/api/v1/files:read", true},
+		{"surviving delete granted", "functions:/api/v1/files:delete", true},
+		{"absent resource denied", "billing::read", false},
+	}
+	for _, p := range probes {
+		reqs := entitlements.Requirements{{"bearer": {p.req}}}
+		orig := ec.VerifyEntitlements(entitlements.Entitlements{"bearer": compactRealWorldInput}, reqs)
+		comp := ec.VerifyEntitlements(entitlements.Entitlements{"bearer": compacted}, reqs)
+		assert.Equal(t, p.want, orig, "original result: "+p.name)
+		assert.Equal(t, orig, comp, "authority equivalence: "+p.name)
 	}
 }
