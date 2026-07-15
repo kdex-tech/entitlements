@@ -7,6 +7,30 @@ Entitlements = Dict[SecurityScheme, List[str]]
 RequirementSet = Dict[SecurityScheme, List[str]]
 Requirements = List[RequirementSet]
 
+
+class BindError(Exception):
+    """Base class for bind_requirements failures."""
+
+
+class UnboundPlaceholderError(BindError):
+    """A requirement declared a {placeholder} the binding does not resolve.
+    An unbound placeholder is an error, never a pass."""
+
+
+class WildcardRequirementError(BindError):
+    """Strict mode: a requirement's resourceName is a wildcard. Wildcards are
+    meaningful only on the held side; as a requirement the spelling is
+    ambiguous. Use a {placeholder} for the resource being addressed, or an
+    opaque scope for a context-less capability."""
+
+
+class InvalidBoundValueError(BindError):
+    """A placeholder was bound to "" or "*" — the wildcard spelling, not a
+    concrete resource name. Binding one would silently widen the requirement to
+    the whole resource class, so a binder that could not resolve a value fails
+    here rather than widening the gate."""
+
+
 @dataclasses.dataclass(frozen=True)
 class Pattern:
     """Represents a parsed entitlement or requirement pattern."""
@@ -24,6 +48,23 @@ class Pattern:
             return cls(resource=parts[0], name="*", verb=parts[1])
         else:
             return cls(opaque=s)
+
+    @property
+    def placeholder(self) -> Optional[str]:
+        """The binding key when this pattern's resourceName has the form
+        "{key}", else None. "{}" is a literal, not a placeholder. Meaningful
+        only on the requirement side; held-side placeholders are literal text.
+        """
+        n = self.name
+        if n is not None and len(n) > 2 and n.startswith("{") and n.endswith("}"):
+            return n[1:-1]
+        return None
+
+    @property
+    def is_wildcard_name(self) -> bool:
+        """Whether this pattern's resourceName is a wildcard. Note `parse` maps
+        the short form (<resource>:<verb>) to name="*"."""
+        return self.opaque is None and self.name in ("*", "")
 
     def satisfies(self, required: "Pattern") -> bool:
         # Both opaque: must match exactly
@@ -129,6 +170,7 @@ class EntitlementsChecker:
         ]
         self._base_patterns: List[Pattern] = []
         self.default_scheme = default_scheme
+        self._strict_requirements = False
 
     def with_base_entitlements(self, patterns: List[str]) -> "EntitlementsChecker":
         """Sets the base entitlements: patterns that apply to every caller
@@ -143,6 +185,92 @@ class EntitlementsChecker:
         """
         self._base_patterns = [Pattern.parse(s) for s in patterns]
         return self
+
+    def with_strict_requirements(self, strict: bool) -> "EntitlementsChecker":
+        """Rejects wildcard resourceNames on the requirement side. Never affects
+        entitlements, where wildcards remain meaningful.
+
+        When enabled, bind_requirements raises WildcardRequirementError (the
+        loud path) and verify treats both a wildcard requirement and an unbound
+        placeholder as unsatisfiable (a fail-closed backstop for callers that
+        skip binding).
+
+        Defaults to False; a future major version will default it to True.
+        Returns self for chaining.
+        """
+        self._strict_requirements = strict
+        return self
+
+    def bind_requirements(self, requirements: Requirements, binding: Dict[str, str]) -> Requirements:
+        """Substitutes every {placeholder} resourceName with its value from
+        `binding`, returning the rewritten requirements. Sets containing no
+        placeholder are returned unchanged.
+
+        Raises UnboundPlaceholderError if a placeholder has no entry in
+        `binding` — an unbound placeholder is an error, never a pass. Keys that
+        match no placeholder are ignored, so a caller may pass a superset.
+        Raises WildcardRequirementError under strict mode for a wildcard
+        requirement.
+        """
+        # Strict scans EVERY requirement before any placeholder is resolved, so a
+        # wildcard is reported deterministically no matter where it sits in the
+        # list. Mirrors the Go reference. A single interleaved pass would make the
+        # raised error depend on item order: ["x:{id}:write", "x:*:read"] would
+        # raise UnboundPlaceholderError, and the same list reversed would raise
+        # WildcardRequirementError — cross-port drift.
+        if self._strict_requirements:
+            for req_set in requirements:
+                for entries in req_set.values():
+                    for s in entries:
+                        p = Pattern.parse(s)
+                        if p.placeholder is None and p.is_wildcard_name:
+                            raise WildcardRequirementError(
+                                f"wildcard resourceName is not allowed in requirement {s!r}"
+                            )
+
+        out: Requirements = []
+        for req_set in requirements:
+            new_set: RequirementSet = {}
+            for scheme, entries in req_set.items():
+                new_entries: List[str] = []
+                for s in entries:
+                    p = Pattern.parse(s)
+                    key = p.placeholder
+                    if key is None:
+                        new_entries.append(s)
+                        continue
+                    if key not in binding:
+                        raise UnboundPlaceholderError(
+                            f"unbound placeholder {key!r} in requirement {s!r}"
+                        )
+                    v = binding[key]
+                    # "" and "*" are the wildcard spelling, not concrete names:
+                    # binding one would widen the requirement to the whole
+                    # class. Fail like an unbound placeholder.
+                    if v in ("", "*"):
+                        raise InvalidBoundValueError(
+                            f"bound value must not be empty or a wildcard: "
+                            f"{key!r} bound to {v!r} in requirement {s!r}"
+                        )
+                    new_entries.append(f"{p.resource}:{v}:{p.verb}")
+                new_set[scheme] = new_entries
+            out.append(new_set)
+        return out
+
+    def wildcard_requirements(self, requirements: Requirements) -> List[str]:
+        """Returns the requirement strings whose resourceName is a wildcard —
+        exactly what strict mode rejects. De-duplicated, first-seen order; an
+        empty result means the requirements are strict-clean. Use it to
+        inventory a migration.
+        """
+        out: List[str] = []
+        for req_set in requirements:
+            for entries in req_set.values():
+                for s in entries:
+                    p = Pattern.parse(s)
+                    if p.placeholder is None and p.is_wildcard_name and s not in out:
+                        out.append(s)
+        return out
 
     def verify(self, user_entitlements: Entitlements, requirements: Requirements) -> bool:
         if not requirements:
@@ -177,6 +305,14 @@ class EntitlementsChecker:
             user_list = user_patterns.get(scheme, [])
             for req_str in required_patterns:
                 req_p = Pattern.parse(req_str)
+                # Strict backstop for callers that skip bind_requirements: a
+                # wildcard requirement is an illegal spelling and an unbound
+                # placeholder was never resolved. Both are unsatisfiable rather
+                # than silently admitted — a held wildcard would match either.
+                if self._strict_requirements and (
+                    req_p.placeholder is not None or req_p.is_wildcard_name
+                ):
+                    return False
                 satisfied = (
                     any(p.satisfies(req_p) for p in user_list)
                     or (

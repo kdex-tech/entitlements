@@ -1,4 +1,13 @@
-from entitlements import EntitlementsChecker, Pattern, verify_attenuation, compact
+import pytest
+from entitlements import (
+    EntitlementsChecker,
+    InvalidBoundValueError,
+    Pattern,
+    UnboundPlaceholderError,
+    WildcardRequirementError,
+    compact,
+    verify_attenuation,
+)
 
 def test_pattern_parse():
     assert Pattern.parse("pages:/foo:read") == Pattern(resource="pages", name="/foo", verb="read")
@@ -299,3 +308,139 @@ def test_compact_preserves_authority():
         comp = checker.verify({"bearer": compacted}, reqs)
         assert orig == want, f"original result for {req}"
         assert orig == comp, f"authority equivalence for {req}"
+
+
+def test_placeholder_recognition():
+    assert Pattern.parse("vs:{vector_store_id}:read").placeholder == "vector_store_id"
+    assert Pattern.parse("vs:{a}:read").placeholder == "a"
+    assert Pattern.parse("vs:{}:read").placeholder is None  # literal
+    assert Pattern.parse("vs:vs_alice:read").placeholder is None
+    assert Pattern.parse("vs:*:read").placeholder is None
+    assert Pattern.parse("opaque").placeholder is None
+
+
+def test_bind_requirements_substitutes_and_scopes():
+    ec = EntitlementsChecker()
+    reqs = [{"bearer": ["vector_stores:{vector_store_id}:write"]}]
+    held = {"bearer": ["vector_stores:vs_alice:all"]}
+
+    bound = ec.bind_requirements(reqs, {"vector_store_id": "vs_alice"})
+    assert ec.verify(held, bound)
+
+    bound_other = ec.bind_requirements(reqs, {"vector_store_id": "vs_bob"})
+    assert not ec.verify(held, bound_other), "vs_alice must not satisfy vs_bob"
+
+    # A held wildcard still passes a bound requirement.
+    assert ec.verify({"bearer": ["vector_stores::all"]}, bound_other)
+
+
+def test_bind_requirements_unbound_raises():
+    ec = EntitlementsChecker()
+    reqs = [{"bearer": ["vector_stores:{vector_store_id}:write"]}]
+    with pytest.raises(UnboundPlaceholderError):
+        ec.bind_requirements(reqs, {"wrong_key": "vs_alice"})
+    with pytest.raises(UnboundPlaceholderError):
+        ec.bind_requirements(reqs, {})
+
+
+def test_bind_requirements_rejects_wildcard_bound_value():
+    ec = EntitlementsChecker()
+    reqs = [{"bearer": ["vector_stores:{vector_store_id}:write"]}]
+    # "" and "*" are the wildcard spelling, not a concrete resource name.
+    # Binding one would widen the requirement to every store.
+    for v in ("", "*"):
+        with pytest.raises(InvalidBoundValueError):
+            ec.bind_requirements(reqs, {"vector_store_id": v})
+    # A legitimate value still binds.
+    ec.bind_requirements(reqs, {"vector_store_id": "vs_alice"})
+
+
+def test_bind_requirements_no_placeholder_is_unchanged():
+    ec = EntitlementsChecker()
+    reqs = [{"bearer": ["functions:/api/v1/files:read"]}]
+    assert ec.bind_requirements(reqs, {}) == reqs
+
+
+def test_bind_requirements_multiple_and_superset():
+    ec = EntitlementsChecker()
+    reqs = [{"bearer": ["vector_stores:{vector_store_id}:write", "files:{file_id}:read"]}]
+    bound = ec.bind_requirements(
+        reqs, {"vector_store_id": "vs_alice", "file_id": "file_1", "unused": "ignored"}
+    )
+    held = {"bearer": ["vector_stores:vs_alice:all", "files:file_1:read"]}
+    assert ec.verify(held, bound)
+
+    with pytest.raises(UnboundPlaceholderError):
+        ec.bind_requirements(reqs, {"vector_store_id": "vs_alice"})
+
+
+def test_held_side_placeholder_is_literal():
+    ec = EntitlementsChecker()
+    held = {"bearer": ["vector_stores:{vector_store_id}:all"]}
+    assert not ec.verify(held, [{"bearer": ["vector_stores:vs_alice:write"]}]), (
+        "a held-side placeholder must be literal text, not a wildcard"
+    )
+
+
+def test_strict_rejects_wildcard_requirements():
+    held = {"bearer": ["vector_stores:vs_alice:all"]}
+
+    # Strict off preserves existing behavior.
+    assert EntitlementsChecker().verify(held, [{"bearer": ["vector_stores:*:write"]}])
+
+    strict = EntitlementsChecker().with_strict_requirements(True)
+    assert not strict.verify(held, [{"bearer": ["vector_stores:*:write"]}])
+    assert strict.verify(held, [{"bearer": ["vector_stores:vs_alice:write"]}])
+
+    # A wildcard requirement is illegal by SPELLING — a genuine wildcard grant
+    # does not rescue it. (Parity with Go's TestStrictRejectsWildcardRequirement.)
+    assert not strict.verify(
+        {"bearer": ["vector_stores::all"]}, [{"bearer": ["vector_stores:*:write"]}]
+    )
+
+    for s in ("vector_stores:*:write", "vector_stores::write", "vector_stores:write"):
+        with pytest.raises(WildcardRequirementError):
+            strict.bind_requirements([{"bearer": [s]}], {})
+
+    # Opaque and concrete requirements bind cleanly under strict — no false reject.
+    for s in ("vector_stores_create", "functions:/api/v1/files:read"):
+        strict.bind_requirements([{"bearer": [s]}], {})
+
+
+def test_strict_wildcard_error_is_order_independent():
+    # Strict scans all requirements before resolving placeholders, so the
+    # wildcard error wins regardless of position. A single interleaved pass would
+    # raise UnboundPlaceholderError for the first ordering and
+    # WildcardRequirementError for the second — order-dependent, and drift from
+    # the Go reference.
+    strict = EntitlementsChecker().with_strict_requirements(True)
+    for entries in (
+        ["vector_stores:{vector_store_id}:write", "vector_stores:*:read"],
+        ["vector_stores:*:read", "vector_stores:{vector_store_id}:write"],
+    ):
+        with pytest.raises(WildcardRequirementError):
+            strict.bind_requirements([{"bearer": entries}], {})
+
+
+def test_strict_unbound_placeholder_fails_closed():
+    strict = EntitlementsChecker().with_strict_requirements(True)
+    admin = {"bearer": ["vector_stores::all"]}
+    assert not strict.verify(admin, [{"bearer": ["vector_stores:{vector_store_id}:write"]}])
+
+
+def test_wildcard_requirements_inventory():
+    ec = EntitlementsChecker()
+    reqs = [
+        {
+            "bearer": [
+                "functions:/api/v1/ingest:read",
+                "vector_stores:*:write",
+                "apitokens:mint",
+                "vector_stores:*:write",
+                "vector_stores:{vector_store_id}:write",
+                "vector_stores_create",
+            ]
+        }
+    ]
+    assert ec.wildcard_requirements(reqs) == ["vector_stores:*:write", "apitokens:mint"]
+    assert ec.wildcard_requirements([{"bearer": ["users:me:read"]}]) == []
