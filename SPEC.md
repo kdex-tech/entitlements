@@ -63,10 +63,16 @@ Held-side placeholders are meaningless and are treated as literal text.
 `resourceName` with its bound value and returns the rewritten requirements.
 
 - A requirement set containing no placeholder is returned unchanged.
-- A placeholder with no entry in `binding` is an **error**, never a pass. This is
-  the point of the form: an author who declares `{vector_store_id}` on a route
-  whose enforcing layer supplies nothing gets a loud configuration error rather
-  than a silent admit.
+- A placeholder with no entry in `binding` is an **error** from
+  `bindRequirements`, never a pass. This is the point of the form: an author who
+  declares `{vector_store_id}` on a route whose enforcing layer supplies nothing
+  gets a loud configuration error rather than a silent admit.
+- An unbound placeholder that reaches verification **without** passing through
+  `bindRequirements` behaves by mode. With strict **off** (the default) it is an
+  ordinary literal resource name: it fails to match a specific grant, but a held
+  wildcard still matches it — this is the pre-existing behavior the default
+  preserves. With strict **on** it matches nothing at all, which is the
+  fail-closed backstop for a caller that skipped binding.
 - Binding keys that match no placeholder are ignored, so a caller may pass a
   superset without knowing the requirement.
 - Multiple distinct placeholders in one requirement set are permitted; each is
@@ -106,10 +112,13 @@ A list of maps representing alternative security requirement sets (OR'd). Within
    - **Resource**: The resource type in the entitlement must match the resource type in the requirement.
    - **Verb**: The verb in the entitlement must match the verb in the requirement, OR the entitlement verb must be `all`.
    - **Resource Name**:
+     - **Under strict mode**, a requirement resource name that is a wildcard
+       (`*` or empty) or an unbound placeholder matches **nothing**. This check
+       takes precedence over the entitlement-side wildcard rule below — a held
+       wildcard does not rescue an illegal or unresolved requirement.
      - If the entitlement resource name is empty or `*`, it matches all resource names in requirements.
      - If the requirement resource name is empty or `*`, it matches all resource names in entitlements.
        **Deprecated**: this direction is what strict mode rejects. See *Requirement Forms*.
-     - A requirement resource name that is an unbound placeholder matches nothing under strict mode.
      - Otherwise, the resource names must match exactly.
 
 ### Verification Flow
