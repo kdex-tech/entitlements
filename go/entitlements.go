@@ -369,6 +369,10 @@ func (ec *EntitlementsChecker) VerifyResourceEntitlements(
 
 // VerifyResourceParsedEntitlements is a high-performance check for a specific resource instance
 // using pre-parsed entitlements and requirements.
+//
+// Under WithStrictRequirements, a resourceName of "*" makes the identity
+// requirement this method builds illegal by spelling, so it is denied
+// regardless of grants — see WithStrictRequirements for the full explanation.
 func (ec *EntitlementsChecker) VerifyResourceParsedEntitlements(
 	resource string,
 	resourceName string,
@@ -436,6 +440,16 @@ func (ec *EntitlementsChecker) WithLogger(log logr.Logger) *EntitlementsChecker 
 // Defaults to false; a future major version will default it to true. Intended
 // for use during checker construction; not safe for concurrent mutation with
 // verify calls in flight.
+//
+// VerifyResourceEntitlements and VerifyResourceParsedEntitlements build their
+// identity requirement from the caller-supplied resourceName (as
+// "<resource>:<resourceName>:<verb>"). They already reject an empty
+// resourceName outright, but "*" passes that guard; under strict, "*" makes
+// the identity a wildcard requirement — illegal by spelling — so the check
+// denies unconditionally, regardless of the caller's grants, including a
+// genuine wildcard grant like "pages::all". Callers must pass a concrete
+// resourceName. There is deliberately no requirement spelling for "holds
+// authority over the whole class"; use an opaque capability scope for that.
 func (ec *EntitlementsChecker) WithStrictRequirements(strict bool) *EntitlementsChecker {
 	ec.strictRequirements = strict
 	return ec

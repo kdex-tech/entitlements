@@ -203,6 +203,46 @@ func TestStrictUnboundPlaceholderFailsClosedInVerify(t *testing.T) {
 	}
 }
 
+func TestStrictWildcardResourceNameIdentityIsDenied(t *testing.T) {
+	// VerifyResourceParsedEntitlements builds its identity requirement from the
+	// caller-supplied resourceName. Under strict a "*" resourceName makes that
+	// identity a wildcard requirement, which is illegal by spelling — so the gate
+	// denies regardless of the grant, including a genuine wildcard grant. Callers
+	// wanting "holds class-wide authority" must use an opaque capability instead.
+	strict := NewEntitlementsChecker(nil, "bearer", false).WithStrictRequirements(true)
+	admin := strict.ParseEntitlements(Entitlements{"bearer": {"pages::all"}})
+	noReqs := strict.ParseRequirements(nil)
+
+	ok, err := strict.VerifyResourceParsedEntitlements("pages", "*", admin, noReqs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("strict: a wildcard resourceName identity must be denied, even for a wildcard grant")
+	}
+
+	// A concrete resourceName still passes for the same caller.
+	ok, err = strict.VerifyResourceParsedEntitlements("pages", "/foo", admin, noReqs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("strict: a concrete identity must still pass for a wildcard grant")
+	}
+
+	// With strict off (the default), the same wildcard identity is admitted —
+	// this is the v0.3.0 behavior the default preserves.
+	lax := NewEntitlementsChecker(nil, "bearer", false)
+	laxAdmin := lax.ParseEntitlements(Entitlements{"bearer": {"pages::all"}})
+	ok, err = lax.VerifyResourceParsedEntitlements("pages", "*", laxAdmin, lax.ParseRequirements(nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("strict off: a wildcard resourceName identity must behave as it did in v0.3.0")
+	}
+}
+
 func TestWildcardRequirements(t *testing.T) {
 	ec := NewEntitlementsChecker(nil, "bearer", false)
 
