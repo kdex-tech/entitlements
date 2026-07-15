@@ -121,18 +121,50 @@ right tool precisely where severing blanket authority is the goal.
 
 ## Public API
 
-Binding is separated from matching. `ParsedRequirements` are parsed once per
-route and cached; a binding is per-request. So binding cannot be folded into
-parsing, and matching stays on the hot path with an unchanged signature.
+Binding is separated from matching. In Go and TypeScript `ParsedRequirements`
+are parsed once per route and cached, while a binding is per-request — so
+binding cannot be folded into parsing, and matching stays on the hot path with
+an unchanged signature.
 
 ```
-Bind(parsedRequirements, binding) -> parsedRequirements'   // per-request; returns an error
-Verify(parsedEntitlements, parsedRequirements')  -> bool   // unchanged
+Bind(requirements, binding) -> requirements'   // per-request; returns an error
+Verify(entitlements, requirements')  -> bool   // unchanged
 ```
 
 Requirement sets containing no placeholder return the receiver unchanged (a
-`hasPlaceholder` flag is precomputed at parse time), so unaffected routes pay
-nothing.
+`hasPlaceholder` flag is precomputed where a parsed type exists), so unaffected
+routes pay nothing.
+
+**Bind operates on whatever its port's `Verify` consumes.** Only Go and
+TypeScript have `ParsedEntitlements` / `ParsedRequirements`; Rust and Python
+parse inline inside `verify()` and have no pre-parsed types. Adding them is out
+of scope and would buy nothing — a port that re-parses per call pays nothing
+extra to bind raw `Requirements`. Method names still map 1:1 per the
+cross-port convention; only the argument type follows the port.
+
+| port | binds | returns |
+| --- | --- | --- |
+| Go | `ParsedRequirements` | `(ParsedRequirements, error)` |
+| TypeScript | `ParsedRequirements` | `ParsedRequirements` (throws) |
+| Rust | `&Requirements` | `Result<Requirements, BindError>` |
+| Python | `Requirements` | `Requirements` (raises) |
+
+### Where strict fires
+
+**Not at parse time.** Go's `ParseRequirements` and TypeScript's
+`parseRequirements` return a value with no error channel; giving them one is a
+breaking signature change and would defeat `v0.4.0`'s additivity. Strict is
+enforced in two places instead:
+
+1. **`BindRequirements` returns `ErrWildcardRequirement`** — it already owns an
+   error channel, and it is the per-request call every consumer makes once the
+   binding step lands. This is the loud path.
+2. **`Verify` treats a wildcard requirement as unsatisfiable** when strict is on
+   — a fail-closed backstop for a consumer that skips `Bind` entirely. `Verify`
+   keeps its `bool` signature; strict simply makes the requirement match nothing.
+
+With strict off (the `v0.4.0` default) neither fires, so behavior is identical
+to `v0.3.0`.
 
 ### Go
 
@@ -164,8 +196,9 @@ var ErrWildcardRequirement = errors.New("entitlements: wildcard resourceName is 
 pub type Binding = std::collections::HashMap<String, String>;
 
 impl EntitlementsChecker {
-    pub fn bind_requirements(&self, reqs: &ParsedRequirements, b: &Binding)
-        -> Result<ParsedRequirements, BindError>;
+    // Rust has no pre-parsed type; binds raw Requirements.
+    pub fn bind_requirements(&self, reqs: &Requirements, b: &Binding)
+        -> Result<Requirements, BindError>;
     pub fn with_strict_requirements(self, strict: bool) -> Self;
     pub fn wildcard_requirements(&self, reqs: &Requirements) -> Vec<String>;
 }
@@ -176,7 +209,8 @@ pub enum BindError { UnboundPlaceholder(String), WildcardRequirement(String) }
 ### Python
 
 ```python
-def bind_requirements(self, requirements: ParsedRequirements, binding: dict[str, str]) -> ParsedRequirements:
+# Python has no pre-parsed type; binds raw Requirements.
+def bind_requirements(self, requirements: Requirements, binding: dict[str, str]) -> Requirements:
     """Raises UnboundPlaceholderError / WildcardRequirementError."""
 
 def with_strict_requirements(self, strict: bool) -> "EntitlementsChecker": ...
@@ -218,9 +252,9 @@ a superset (e.g. every path value it resolved) without knowing the requirement.
 
 **Strict mode** rejects a requirement whose `resourceName` is `*` or empty —
 including the short (`resource:verb`) and medium (`resource::verb`) forms, which
-are wildcards by definition. It applies at `ParseRequirements` time, not
-`parsePattern` time: `parsePattern` is shared with entitlements, where wildcards
-stay legal.
+are wildcards by definition. It never applies to `parsePattern`, which is shared
+with entitlements, where wildcards stay legal. See *Where strict fires* above
+for the two enforcement points.
 
 **`Dominates` and `Compact` are untouched.** They operate on mint-time
 attenuation, not requirements, and already implement held-side-only wildcards.
