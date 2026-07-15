@@ -60,6 +60,7 @@ type EntitlementsChecker struct {
 	grantReadyByDefault bool
 	log                 *logr.Logger
 	mu                  sync.RWMutex
+	strictRequirements  bool
 }
 
 // NewEntitlementsChecker creates a new entitlements checker with the specified settings.
@@ -209,7 +210,26 @@ type Binding map[string]string
 // one would silently widen the requirement to the whole resource class. A
 // binder that could not resolve a value must fail like an unbound placeholder
 // rather than widen the gate.
+//
+// Under WithStrictRequirements, also returns ErrWildcardRequirement if any
+// requirement in reqs — placeholder or not — has a wildcard resourceName (""
+// or "*", including the short/medium syntaxes). This check runs before the
+// placeholder no-op above, so a wildcard-only requirement set (no placeholder
+// at all) is still rejected rather than passed through unchanged.
 func (ec *EntitlementsChecker) BindRequirements(reqs ParsedRequirements, b Binding) (ParsedRequirements, error) {
+	if ec.strictRequirements {
+		for _, set := range reqs.patterns {
+			for _, list := range set {
+				for _, p := range list {
+					if p.isPattern && p.placeholder == "" && isWildcardName(p.resourceName) {
+						return ParsedRequirements{}, fmt.Errorf("%w: %q",
+							ErrWildcardRequirement, p.raw)
+					}
+				}
+			}
+		}
+	}
+
 	if !reqs.hasPlaceholder {
 		return reqs, nil
 	}
@@ -249,6 +269,38 @@ func (ec *EntitlementsChecker) BindRequirements(reqs ParsedRequirements, b Bindi
 		bound[i] = newSet
 	}
 	return ParsedRequirements{patterns: bound, hasPlaceholder: false}, nil
+}
+
+// WildcardRequirements returns the requirement strings whose resourceName is a
+// wildcard ("*", empty, or the short/medium syntaxes) — the spellings strict
+// mode rejects outright. Results are de-duplicated and in first-seen order.
+//
+// It is a migration inventory, not a complete strict-mode pre-flight: strict
+// also rejects an unbound placeholder at verification time, which this query
+// does not report (a placeholder is the migration's destination, not a target).
+// An empty result means no requirement still uses a wildcard spelling.
+//
+// It is a pure query so a caller may log, count, or fail in its own idiom. Use
+// it to inventory what remains to migrate before enabling WithStrictRequirements.
+func (ec *EntitlementsChecker) WildcardRequirements(reqs Requirements) []string {
+	var out []string
+	seen := make(map[string]struct{})
+	for _, set := range reqs {
+		for _, list := range set {
+			for _, s := range list {
+				p := ec.parsePattern(s)
+				if !p.isPattern || p.placeholder != "" || !isWildcardName(p.resourceName) {
+					continue
+				}
+				if _, dup := seen[s]; dup {
+					continue
+				}
+				seen[s] = struct{}{}
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 // VerifyEntitlements checks if the user's entitlements satisfy the given security requirements.
@@ -373,8 +425,34 @@ func (ec *EntitlementsChecker) WithLogger(log logr.Logger) *EntitlementsChecker 
 	return ec
 }
 
+// WithStrictRequirements rejects wildcard resourceNames on the requirement side.
+// It never affects entitlements, where wildcards remain meaningful.
+//
+// When enabled, BindRequirements returns ErrWildcardRequirement for such a
+// requirement (the loud path), and verification treats both a wildcard
+// requirement and an unbound placeholder as unsatisfiable (a fail-closed
+// backstop for callers that skip BindRequirements).
+//
+// Defaults to false; a future major version will default it to true. Intended
+// for use during checker construction; not safe for concurrent mutation with
+// verify calls in flight.
+func (ec *EntitlementsChecker) WithStrictRequirements(strict bool) *EntitlementsChecker {
+	ec.strictRequirements = strict
+	return ec
+}
+
 // hasParsedEntitlement checks if the user has a specific entitlement using pre-parsed patterns.
 func (ec *EntitlementsChecker) hasParsedEntitlement(entitlementList []entitlementPattern, scheme string, requirement entitlementPattern, isAnonymousCaller bool) bool {
+	// Strict backstop for callers that skip BindRequirements: a wildcard
+	// requirement is an illegal spelling, and an unbound placeholder was never
+	// resolved. Both are unsatisfiable rather than silently admitted — a held
+	// wildcard would otherwise match either one.
+	if ec.strictRequirements && requirement.isPattern {
+		if requirement.placeholder != "" || isWildcardName(requirement.resourceName) {
+			return false
+		}
+	}
+
 	// Caller's own entitlements for this scheme.
 	for _, entitlement := range entitlementList {
 		if entitlement.matches(requirement) {
@@ -501,6 +579,13 @@ type entitlementPattern struct {
 // declares a {placeholder} that the supplied Binding does not resolve. An
 // unbound placeholder is an error, never a pass.
 var ErrUnboundPlaceholder = errors.New("entitlements: unbound placeholder in requirement")
+
+// ErrWildcardRequirement is returned by BindRequirements under strict mode when
+// a requirement's resourceName is a wildcard ("*" or empty, which includes the
+// short and medium syntaxes). Wildcards are meaningful only on the held side;
+// as a requirement the spelling is ambiguous. Use a {placeholder} for the
+// resource being addressed, or an opaque scope for a context-less capability.
+var ErrWildcardRequirement = errors.New("entitlements: wildcard resourceName is not allowed in a requirement")
 
 // ErrInvalidBoundValue is returned by BindRequirements when a Binding maps a
 // placeholder to "" or "*". Those are the wildcard spelling, not a concrete
