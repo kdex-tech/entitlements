@@ -18,6 +18,7 @@
 - **Names map 1:1, case is idiomatic:** Go `BindRequirements`, Rust `bind_requirements`, Python `bind_requirements`, TypeScript `bindRequirements`. Same for `WithStrictRequirements` / `with_strict_requirements` / `withStrictRequirements` and `WildcardRequirements` / `wildcard_requirements` / `wildcardRequirements`.
 - **v0.4.0 is additive.** No existing signature changes. No existing test changes. `WithStrictRequirements` defaults **false**. If an existing test needs editing, stop — that is a design violation, not a test problem.
 - **Placeholder grammar:** a requirement `resourceName` is a placeholder **iff** it starts with `{`, ends with `}`, **and has length > 2**. `{}` is a literal, not a placeholder.
+- **A placeholder bound to `""` or `"*"` is an error** — `ErrInvalidBoundValue` (Go) / `BindError::InvalidBoundValue` (Rust) / `InvalidBoundValueError` (Python, TypeScript). Those are the wildcard spelling, not concrete resourceNames: binding one would silently widen the requirement to the whole class, which is the same escalation the placeholder form exists to prevent. A binder that could not resolve a value must fail like an unbound placeholder. *(Added during execution after a Task 2 review finding; approved by the human. Already implemented in Go — Tasks 4-6 must mirror it.)*
 - **Wildcard resourceName** means `""` or `"*"`. Note Go/TS parse the short form (`a:b`) to `resourceName: ""` but **Rust/Python parse it to `name: "*"`** — both must be treated as wildcards.
 - **Held-side placeholders are literal text.** Only requirements are bound.
 - **Never touch** `Dominates`/`dominates`, `VerifyAttenuation`/`verify_attenuation`, or `Compact`/`compact`. They govern mint-time attenuation, not requirements.
@@ -646,9 +647,13 @@ At the top of `hasParsedEntitlement`, before the entitlement loop:
 
 ```go
 // WildcardRequirements returns the requirement strings whose resourceName is a
-// wildcard ("*", empty, or the short/medium syntaxes) — exactly what strict mode
-// rejects. Results are de-duplicated and in first-seen order; an empty result
-// means the requirements are strict-clean.
+// wildcard ("*", empty, or the short/medium syntaxes) — the spellings strict
+// mode rejects outright. Results are de-duplicated and in first-seen order.
+//
+// It is a migration inventory, not a complete strict-mode pre-flight: strict
+// also rejects an unbound placeholder at verification time, which this query
+// does not report (a placeholder is the migration's destination, not a target).
+// An empty result means no requirement still uses a wildcard spelling.
 //
 // It is a pure query so a caller may log, count, or fail in its own idiom. Use
 // it to inventory what remains to migrate before enabling WithStrictRequirements.
@@ -715,7 +720,7 @@ Refs #4"
 - Consumes: `SPEC.md` (Task 1); the Go port (Task 2, 3) as the reference for behavior and docs.
 - Produces:
   - `pub type Binding = HashMap<String, String>`
-  - `pub enum BindError { UnboundPlaceholder(String), WildcardRequirement(String) }`
+  - `pub enum BindError { UnboundPlaceholder(String), WildcardRequirement(String), InvalidBoundValue(String) }`
   - `impl Pattern { pub fn placeholder(&self) -> Option<&str>; pub fn is_wildcard_name(&self) -> bool }`
   - `EntitlementsChecker::bind_requirements(&self, &Requirements, &Binding) -> Result<Requirements, BindError>`
   - `EntitlementsChecker::with_strict_requirements(self, bool) -> Self`
@@ -778,6 +783,26 @@ Append inside `rust/src/lib.rs`'s `#[cfg(test)] mod tests`:
             ec.bind_requirements(&r, &Binding::new()),
             Err(BindError::UnboundPlaceholder(_))
         ));
+    }
+
+    #[test]
+    fn bind_requirements_rejects_wildcard_bound_value() {
+        let ec = EntitlementsChecker::new(vec![], "bearer".to_string());
+        let r = reqs("bearer", &["vector_stores:{vector_store_id}:write"]);
+        // "" and "*" are the wildcard spelling, not a concrete resourceName.
+        // Binding one would widen the requirement to every store.
+        for v in ["", "*"] {
+            let mut b = Binding::new();
+            b.insert("vector_store_id".to_string(), v.to_string());
+            assert!(
+                matches!(ec.bind_requirements(&r, &b), Err(BindError::InvalidBoundValue(_))),
+                "binding to {v:?} should be rejected"
+            );
+        }
+        // A legitimate value still binds.
+        let mut ok = Binding::new();
+        ok.insert("vector_store_id".to_string(), "vs_alice".to_string());
+        assert!(ec.bind_requirements(&r, &ok).is_ok());
     }
 
     #[test]
@@ -883,6 +908,12 @@ pub enum BindError {
     /// Strict mode: a requirement's resourceName is a wildcard. Carries the
     /// offending requirement string.
     WildcardRequirement(String),
+    /// A placeholder was bound to "" or "*" — the wildcard spelling, not a
+    /// concrete resourceName. Binding one would silently widen the requirement
+    /// to the whole resource class, so a binder that could not resolve a value
+    /// fails here rather than widening the gate. Carries the offending
+    /// requirement string.
+    InvalidBoundValue(String),
 }
 
 impl std::fmt::Display for BindError {
@@ -891,6 +922,9 @@ impl std::fmt::Display for BindError {
             Self::UnboundPlaceholder(s) => write!(f, "unbound placeholder in requirement {s:?}"),
             Self::WildcardRequirement(s) => {
                 write!(f, "wildcard resourceName is not allowed in requirement {s:?}")
+            }
+            Self::InvalidBoundValue(s) => {
+                write!(f, "bound value must not be empty or a wildcard, in requirement {s:?}")
             }
         }
     }
@@ -986,6 +1020,12 @@ In `new`, add `strict_requirements: false` to the struct literal. Then:
                             let v = b
                                 .get(key)
                                 .ok_or_else(|| BindError::UnboundPlaceholder(s.clone()))?;
+                            // "" and "*" are the wildcard spelling, not concrete
+                            // names: binding one would widen the requirement to
+                            // the whole class. Fail like an unbound placeholder.
+                            if v.is_empty() || v == "*" {
+                                return Err(BindError::InvalidBoundValue(s.clone()));
+                            }
                             match &p {
                                 Pattern::Structured { resource, verb, .. } => {
                                     new_list.push(format!("{resource}:{v}:{verb}"))
@@ -1070,7 +1110,7 @@ Refs #4"
 **Interfaces:**
 - Consumes: `SPEC.md` (Task 1); the Go port as the behavior reference.
 - Produces:
-  - `class BindError(Exception)`, `class UnboundPlaceholderError(BindError)`, `class WildcardRequirementError(BindError)`
+  - `class BindError(Exception)`, `class UnboundPlaceholderError(BindError)`, `class WildcardRequirementError(BindError)`, `class InvalidBoundValueError(BindError)`
   - `Pattern.placeholder` (property → `Optional[str]`), `Pattern.is_wildcard_name` (property → `bool`)
   - `EntitlementsChecker.bind_requirements(requirements, binding) -> Requirements`
   - `EntitlementsChecker.with_strict_requirements(strict) -> EntitlementsChecker`
@@ -1086,6 +1126,7 @@ Append to `python/tests/test_entitlements.py`:
 import pytest
 from entitlements import (
     EntitlementsChecker,
+    InvalidBoundValueError,
     Pattern,
     UnboundPlaceholderError,
     WildcardRequirementError,
@@ -1123,6 +1164,18 @@ def test_bind_requirements_unbound_raises():
         ec.bind_requirements(reqs, {"wrong_key": "vs_alice"})
     with pytest.raises(UnboundPlaceholderError):
         ec.bind_requirements(reqs, {})
+
+
+def test_bind_requirements_rejects_wildcard_bound_value():
+    ec = EntitlementsChecker()
+    reqs = [{"bearer": ["vector_stores:{vector_store_id}:write"]}]
+    # "" and "*" are the wildcard spelling, not a concrete resource name.
+    # Binding one would widen the requirement to every store.
+    for v in ("", "*"):
+        with pytest.raises(InvalidBoundValueError):
+            ec.bind_requirements(reqs, {"vector_store_id": v})
+    # A legitimate value still binds.
+    ec.bind_requirements(reqs, {"vector_store_id": "vs_alice"})
 
 
 def test_bind_requirements_no_placeholder_is_unchanged():
@@ -1215,6 +1268,13 @@ class WildcardRequirementError(BindError):
     meaningful only on the held side; as a requirement the spelling is
     ambiguous. Use a {placeholder} for the resource being addressed, or an
     opaque scope for a context-less capability."""
+
+
+class InvalidBoundValueError(BindError):
+    """A placeholder was bound to "" or "*" — the wildcard spelling, not a
+    concrete resource name. Binding one would silently widen the requirement to
+    the whole resource class, so a binder that could not resolve a value fails
+    here rather than widening the gate."""
 ```
 
 Add to `Pattern` (a frozen dataclass, so these are computed properties):
@@ -1298,7 +1358,16 @@ Add after `with_base_entitlements`:
                         raise UnboundPlaceholderError(
                             f"unbound placeholder {key!r} in requirement {s!r}"
                         )
-                    new_entries.append(f"{p.resource}:{binding[key]}:{p.verb}")
+                    v = binding[key]
+                    # "" and "*" are the wildcard spelling, not concrete names:
+                    # binding one would widen the requirement to the whole
+                    # class. Fail like an unbound placeholder.
+                    if v in ("", "*"):
+                        raise InvalidBoundValueError(
+                            f"bound value must not be empty or a wildcard: "
+                            f"{key!r} bound to {v!r} in requirement {s!r}"
+                        )
+                    new_entries.append(f"{p.resource}:{v}:{p.verb}")
                 new_set[scheme] = new_entries
             out.append(new_set)
         return out
@@ -1368,7 +1437,7 @@ Refs #4"
 - Consumes: `SPEC.md` (Task 1); the Go port as the behavior reference.
 - Produces:
   - `export type Binding = Record<string, string>`
-  - `export class UnboundPlaceholderError extends Error`, `export class WildcardRequirementError extends Error`
+  - `export class UnboundPlaceholderError extends Error`, `export class WildcardRequirementError extends Error`, `export class InvalidBoundValueError extends Error`
   - `EntitlementsChecker.bindRequirements(reqs: ParsedRequirements, binding: Binding): ParsedRequirements`
   - `EntitlementsChecker.withStrictRequirements(strict: boolean): EntitlementsChecker`
   - `EntitlementsChecker.wildcardRequirements(reqs: Requirements): string[]`
@@ -1415,6 +1484,20 @@ describe("requirement placeholders", () => {
       UnboundPlaceholderError,
     );
     expect(() => ec.bindRequirements(reqs, {})).toThrow(UnboundPlaceholderError);
+  });
+
+  it("throws on a bound value that is empty or a wildcard", () => {
+    const ec = new EntitlementsChecker([], "bearer", false);
+    const reqs = ec.parseRequirements([{ bearer: ["vector_stores:{vector_store_id}:write"] }]);
+    // "" and "*" are the wildcard spelling, not a concrete resourceName.
+    // Binding one would widen the requirement to every store.
+    for (const v of ["", "*"]) {
+      expect(() => ec.bindRequirements(reqs, { vector_store_id: v })).toThrow(
+        InvalidBoundValueError,
+      );
+    }
+    // A legitimate value still binds.
+    expect(() => ec.bindRequirements(reqs, { vector_store_id: "vs_alice" })).not.toThrow();
   });
 
   it("returns a no-placeholder set unchanged", () => {
@@ -1508,7 +1591,7 @@ describe("wildcardRequirements", () => {
 });
 ```
 
-Add `UnboundPlaceholderError`, `WildcardRequirementError`, and `Requirements` to the test file's import from `./index.js` (match the existing import style).
+Add `UnboundPlaceholderError`, `WildcardRequirementError`, `InvalidBoundValueError`, and `Requirements` to the test file's import from `./index.js` (match the existing import style).
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1547,6 +1630,19 @@ export class WildcardRequirementError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WildcardRequirementError";
+  }
+}
+
+/**
+ * A placeholder was bound to "" or "*" — the wildcard spelling, not a concrete
+ * resourceName. Binding one would silently widen the requirement to the whole
+ * resource class, so a binder that could not resolve a value fails here rather
+ * than widening the gate.
+ */
+export class InvalidBoundValueError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidBoundValueError";
   }
 }
 
@@ -1693,6 +1789,14 @@ Then:
               `unbound placeholder "${p.placeholder}" in requirement "${p.raw}"`,
             );
           }
+          // "" and "*" are the wildcard spelling, not concrete names: binding
+          // one would widen the requirement to the whole class. Fail like an
+          // unbound placeholder.
+          if (isWildcardName(v)) {
+            throw new InvalidBoundValueError(
+              `bound value must not be empty or a wildcard: "${p.placeholder}" bound to "${v}" in requirement "${p.raw}"`,
+            );
+          }
           // Construct directly rather than re-parsing: a bound value containing
           // ':' would otherwise be re-split into the wrong shape.
           return {
@@ -1771,6 +1875,15 @@ Expected: all four language suites pass. This is the parity gate — if one port
 Run: `rg -n 'BindRequirements|bind_requirements|bindRequirements' go/ rust/ python/ typescript/ -g '!*test*' -g '!node_modules' -g '!target' -g '!.venv' | rg -v '^\s*//|^\s*#'`
 Expected: one definition per port — four hits (Go, Rust, Python, TypeScript). Same check for `WildcardRequirements` / `wildcard_requirements` / `wildcardRequirements` and `WithStrictRequirements` / `with_strict_requirements` / `withStrictRequirements`.
 
+Then verify the three error conditions exist in all four ports:
+
+```bash
+rg -c 'ErrUnboundPlaceholder|UnboundPlaceholder' go/entitlements.go rust/src/lib.rs python/src/entitlements/__init__.py typescript/src/index.ts
+rg -c 'ErrWildcardRequirement|WildcardRequirement' go/entitlements.go rust/src/lib.rs python/src/entitlements/__init__.py typescript/src/index.ts
+rg -c 'ErrInvalidBoundValue|InvalidBoundValue' go/entitlements.go rust/src/lib.rs python/src/entitlements/__init__.py typescript/src/index.ts
+```
+Expected: every file reports ≥1 for each of the three. A zero in any port is drift — the ports must agree on the error conditions, not just the method names.
+
 - [ ] **Step 3: Run lint across all ports**
 
 Run from the repo root: `make lint 2>&1 | tail -10`
@@ -1793,8 +1906,12 @@ A requirement — what a caller must satisfy — may additionally be:
 
 Wildcards (`*` or empty) are a **held-side** concept. As a requirement the
 spelling is ambiguous, and `withStrictRequirements(true)` rejects it. Strict
-defaults to **false**; use `wildcardRequirements()` to inventory what needs
-migrating before enabling it.
+defaults to **false**; use `wildcardRequirements()` to inventory the wildcard
+spellings that still need migrating before enabling it.
+
+Binding a placeholder to `""` or `*` is an error — those are the wildcard
+spelling, not a concrete resource name, so binding one would widen the
+requirement to the whole class.
 ```
 
 - [ ] **Step 5: Bump `VERSION`**
