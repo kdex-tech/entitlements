@@ -25,6 +25,65 @@ Entitlements and requirements can be represented in four forms:
 - `*` can be used as a `<resourceName>` to represent all instances of a resource.
 - `all` can be used as a `<verb>` in an **entitlement** to represent all actions on a resource. A requirement for `read` is satisfied by an entitlement for `all`.
 
+### Requirement Forms
+
+Entitlement forms above describe what a caller **holds**. A **requirement** —
+the thing a caller must satisfy — is additionally constrained:
+
+- **Concrete**: `<resource>:<resourceName>:<verb>`. Satisfied by a held wildcard
+  or an exact `resourceName` match.
+- **Placeholder**: `<resource>:{<key>}:<verb>`. A hole that MUST be bound to a
+  concrete value before verification. A `resourceName` is a placeholder iff it
+  starts with `{`, ends with `}`, and is longer than two characters — so `{}` is
+  a literal, not a placeholder. Binding substitutes the value and then matches
+  the concrete result.
+- **Opaque**: `<string>` with no colons (or not matching the pattern structure).
+  Exact match only, and therefore never satisfied by a wildcard grant. This is
+  the correct form for a context-less capability — one with no resource instance
+  to name, such as "create a store".
+
+**Wildcards are a held-side concept.** A `resourceName` of `*` or empty is
+meaningful in an entitlement (it grants authority over the class) but is
+ambiguous in a requirement, where it has historically meant both "substitute the
+resource being addressed" and "authority over the class as a whole". Placeholders
+now carry the former meaning, so strict mode rejects the latter spelling.
+
+**Strict mode** (`WithStrictRequirements` / `with_strict_requirements` /
+`withStrictRequirements`) rejects a requirement whose `resourceName` is `*` or
+empty — including the short (`<resource>:<verb>`) and medium
+(`<resource>::<verb>`) forms, which are wildcards by definition. It defaults to
+**false**; a future major version defaults it to **true**. It never applies to
+entitlements, where wildcards remain legal.
+
+Held-side placeholders are meaningless and are treated as literal text.
+
+### Binding
+
+`bindRequirements(requirements, binding)` substitutes each placeholder
+`resourceName` with its bound value and returns the rewritten requirements.
+
+- A requirement set containing no placeholder is returned unchanged.
+- A placeholder with no entry in `binding` is an **error**, never a pass. This is
+  the point of the form: an author who declares `{vector_store_id}` on a route
+  whose enforcing layer supplies nothing gets a loud configuration error rather
+  than a silent admit.
+- Binding keys that match no placeholder are ignored, so a caller may pass a
+  superset without knowing the requirement.
+- Multiple distinct placeholders in one requirement set are permitted; each is
+  bound by name. An unbound one among them still errors.
+- Under strict mode, a wildcard `resourceName` in a requirement is an error here.
+
+Binding operates on whatever each port's verification consumes: the pre-parsed
+type in Go and TypeScript, raw `Requirements` in Rust and Python (which parse
+inline and have no pre-parsed type).
+
+`wildcardRequirements(requirements)` returns the requirement strings whose
+`resourceName` is a wildcard — exactly what strict mode rejects. It is a pure
+function so each consumer may log, count, or fail in its own idiom; it exists to
+inventory what remains to migrate before strict is enabled.
+
+All language ports MUST produce identical results.
+
 ### Encoding
 The `resourceName` should be URL-encoded (e.g., `url.PathEscape` in Go) if it contains colons `:` to prevent misinterpretation during pattern splitting.
 
@@ -49,6 +108,8 @@ A list of maps representing alternative security requirement sets (OR'd). Within
    - **Resource Name**:
      - If the entitlement resource name is empty or `*`, it matches all resource names in requirements.
      - If the requirement resource name is empty or `*`, it matches all resource names in entitlements.
+       **Deprecated**: this direction is what strict mode rejects. See *Requirement Forms*.
+     - A requirement resource name that is an unbound placeholder matches nothing under strict mode.
      - Otherwise, the resource names must match exactly.
 
 ### Verification Flow
