@@ -12,6 +12,43 @@ pub type RequirementSet = HashMap<SecurityScheme, Vec<String>>;
 /// A list of alternative requirement sets (OR'd).
 pub type Requirements = Vec<RequirementSet>;
 
+/// Maps a requirement placeholder key to the concrete resourceName it stands
+/// for, e.g. {"vector_store_id": "vs_abc"}.
+pub type Binding = HashMap<String, String>;
+
+/// Why `bind_requirements` refused a requirement set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindError {
+    /// A requirement declared a {placeholder} the Binding does not resolve.
+    /// Carries the offending requirement string.
+    UnboundPlaceholder(String),
+    /// Strict mode: a requirement's resourceName is a wildcard. Carries the
+    /// offending requirement string.
+    WildcardRequirement(String),
+    /// A placeholder was bound to "" or "*" — the wildcard spelling, not a
+    /// concrete resourceName. Binding one would silently widen the requirement
+    /// to the whole resource class, so a binder that could not resolve a value
+    /// fails here rather than widening the gate. Carries the offending
+    /// requirement string.
+    InvalidBoundValue(String),
+}
+
+impl std::fmt::Display for BindError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnboundPlaceholder(s) => write!(f, "unbound placeholder in requirement {s:?}"),
+            Self::WildcardRequirement(s) => {
+                write!(f, "wildcard resourceName is not allowed in requirement {s:?}")
+            }
+            Self::InvalidBoundValue(s) => {
+                write!(f, "bound value must not be empty or a wildcard, in requirement {s:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BindError {}
+
 /// A parsed representation of an entitlement or requirement pattern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pattern {
@@ -42,6 +79,27 @@ impl Pattern {
             },
             _ => Self::Opaque(s.to_string()),
         }
+    }
+
+    /// Returns the binding key when this pattern's resourceName has the form
+    /// "{key}", else None. "{}" is a literal resourceName, not a placeholder.
+    /// Meaningful only on the requirement side; held-side placeholders are
+    /// literal text.
+    pub fn placeholder(&self) -> Option<&str> {
+        match self {
+            Self::Structured { name, .. }
+                if name.len() > 2 && name.starts_with('{') && name.ends_with('}') =>
+            {
+                Some(&name[1..name.len() - 1])
+            }
+            _ => None,
+        }
+    }
+
+    /// Reports whether this pattern's resourceName is a wildcard. Note `parse`
+    /// maps the short form (<resource>:<verb>) to `name: "*"`.
+    pub fn is_wildcard_name(&self) -> bool {
+        matches!(self, Self::Structured { name, .. } if name.is_empty() || name == "*")
     }
 
     /// Checks if this pattern (as an entitlement) satisfies the required pattern.
@@ -183,6 +241,7 @@ pub struct EntitlementsChecker {
     anonymous_entitlements: Vec<Pattern>,
     base_entitlements: Vec<Pattern>,
     default_scheme: String,
+    strict_requirements: bool,
 }
 
 impl EntitlementsChecker {
@@ -192,6 +251,7 @@ impl EntitlementsChecker {
             anonymous_entitlements: parsed_anon,
             base_entitlements: Vec::new(),
             default_scheme,
+            strict_requirements: false,
         }
     }
 
@@ -206,6 +266,88 @@ impl EntitlementsChecker {
     pub fn with_base_entitlements(mut self, patterns: Vec<String>) -> Self {
         self.base_entitlements = patterns.iter().map(|s| Pattern::parse(s)).collect();
         self
+    }
+
+    /// Rejects wildcard resourceNames on the requirement side. Never affects
+    /// entitlements, where wildcards remain meaningful.
+    ///
+    /// When enabled, `bind_requirements` returns `BindError::WildcardRequirement`
+    /// (the loud path) and `verify` treats both a wildcard requirement and an
+    /// unbound placeholder as unsatisfiable (a fail-closed backstop for callers
+    /// that skip binding).
+    ///
+    /// Defaults to false; a future major version will default it to true.
+    pub fn with_strict_requirements(mut self, strict: bool) -> Self {
+        self.strict_requirements = strict;
+        self
+    }
+
+    /// Substitutes every {placeholder} resourceName in `reqs` with its value
+    /// from `b`, returning the rewritten requirements. Sets containing no
+    /// placeholder are returned unchanged.
+    ///
+    /// An unbound placeholder is an error, never a pass. Keys in `b` that match
+    /// no placeholder are ignored, so a caller may pass a superset.
+    pub fn bind_requirements(
+        &self,
+        reqs: &Requirements,
+        b: &Binding,
+    ) -> Result<Requirements, BindError> {
+        let mut out = Requirements::with_capacity(reqs.len());
+        for set in reqs {
+            let mut new_set = RequirementSet::new();
+            for (scheme, list) in set {
+                let mut new_list = Vec::with_capacity(list.len());
+                for s in list {
+                    let p = Pattern::parse(s);
+                    if self.strict_requirements && p.placeholder().is_none() && p.is_wildcard_name()
+                    {
+                        return Err(BindError::WildcardRequirement(s.clone()));
+                    }
+                    match p.placeholder() {
+                        None => new_list.push(s.clone()),
+                        Some(key) => {
+                            let v = b
+                                .get(key)
+                                .ok_or_else(|| BindError::UnboundPlaceholder(s.clone()))?;
+                            // "" and "*" are the wildcard spelling, not concrete
+                            // names: binding one would widen the requirement to
+                            // the whole class. Fail like an unbound placeholder.
+                            if v.is_empty() || v == "*" {
+                                return Err(BindError::InvalidBoundValue(s.clone()));
+                            }
+                            match &p {
+                                Pattern::Structured { resource, verb, .. } => {
+                                    new_list.push(format!("{resource}:{v}:{verb}"))
+                                }
+                                Pattern::Opaque(_) => unreachable!("placeholder implies Structured"),
+                            }
+                        }
+                    }
+                }
+                new_set.insert(scheme.clone(), new_list);
+            }
+            out.push(new_set);
+        }
+        Ok(out)
+    }
+
+    /// Returns the requirement strings whose resourceName is a wildcard —
+    /// exactly what strict mode rejects. De-duplicated, first-seen order; empty
+    /// means strict-clean. Use it to inventory a migration.
+    pub fn wildcard_requirements(&self, reqs: &Requirements) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for set in reqs {
+            for list in set.values() {
+                for s in list {
+                    let p = Pattern::parse(s);
+                    if p.placeholder().is_none() && p.is_wildcard_name() && !out.contains(s) {
+                        out.push(s.clone());
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Verifies if the user's entitlements satisfy any of the requirements.
@@ -254,6 +396,17 @@ impl EntitlementsChecker {
 
             for req_str in required_patterns {
                 let req_p = Pattern::parse(req_str);
+
+                // Strict backstop for callers that skip bind_requirements: a
+                // wildcard requirement is an illegal spelling and an unbound
+                // placeholder was never resolved. Both are unsatisfiable rather
+                // than silently admitted — a held wildcard would match either.
+                if self.strict_requirements
+                    && (req_p.placeholder().is_some() || req_p.is_wildcard_name())
+                {
+                    return false;
+                }
+
                 let satisfied_by_user = user_list.iter().any(|p| p.satisfies(&req_p));
                 let satisfied_by_base = scheme == &self.default_scheme
                     && self.base_entitlements.iter().any(|p| p.satisfies(&req_p));
@@ -702,5 +855,158 @@ mod tests {
             assert_eq!(orig, want, "original result for {req}");
             assert_eq!(orig, comp, "authority equivalence for {req}");
         }
+    }
+
+    fn reqs(scheme: &str, list: &[&str]) -> Requirements {
+        let mut set = RequirementSet::new();
+        set.insert(scheme.to_string(), list.iter().map(|s| s.to_string()).collect());
+        vec![set]
+    }
+
+    fn ents(scheme: &str, list: &[&str]) -> Entitlements {
+        let mut m = Entitlements::new();
+        m.insert(scheme.to_string(), list.iter().map(|s| s.to_string()).collect());
+        m
+    }
+
+    #[test]
+    fn placeholder_recognition() {
+        assert_eq!(Pattern::parse("vs:{vector_store_id}:read").placeholder(), Some("vector_store_id"));
+        assert_eq!(Pattern::parse("vs:{a}:read").placeholder(), Some("a"));
+        assert_eq!(Pattern::parse("vs:{}:read").placeholder(), None); // literal
+        assert_eq!(Pattern::parse("vs:vs_alice:read").placeholder(), None);
+        assert_eq!(Pattern::parse("vs:*:read").placeholder(), None);
+        assert_eq!(Pattern::parse("opaque").placeholder(), None);
+    }
+
+    #[test]
+    fn bind_requirements_substitutes_and_scopes() {
+        let ec = EntitlementsChecker::new(vec![], "bearer".to_string());
+        let r = reqs("bearer", &["vector_stores:{vector_store_id}:write"]);
+        let mut b = Binding::new();
+        b.insert("vector_store_id".to_string(), "vs_alice".to_string());
+
+        let bound = ec.bind_requirements(&r, &b).unwrap();
+        let held = ents("bearer", &["vector_stores:vs_alice:all"]);
+        assert!(ec.verify(&held, &bound));
+
+        let mut b2 = Binding::new();
+        b2.insert("vector_store_id".to_string(), "vs_bob".to_string());
+        let bound2 = ec.bind_requirements(&r, &b2).unwrap();
+        assert!(!ec.verify(&held, &bound2), "vs_alice must not satisfy vs_bob");
+
+        // A held wildcard still passes a bound requirement.
+        assert!(ec.verify(&ents("bearer", &["vector_stores::all"]), &bound2));
+    }
+
+    #[test]
+    fn bind_requirements_unbound_errors() {
+        let ec = EntitlementsChecker::new(vec![], "bearer".to_string());
+        let r = reqs("bearer", &["vector_stores:{vector_store_id}:write"]);
+        assert!(matches!(
+            ec.bind_requirements(&r, &Binding::new()),
+            Err(BindError::UnboundPlaceholder(_))
+        ));
+    }
+
+    #[test]
+    fn bind_requirements_rejects_wildcard_bound_value() {
+        let ec = EntitlementsChecker::new(vec![], "bearer".to_string());
+        let r = reqs("bearer", &["vector_stores:{vector_store_id}:write"]);
+        // "" and "*" are the wildcard spelling, not a concrete resourceName.
+        // Binding one would widen the requirement to every store.
+        for v in ["", "*"] {
+            let mut b = Binding::new();
+            b.insert("vector_store_id".to_string(), v.to_string());
+            assert!(
+                matches!(ec.bind_requirements(&r, &b), Err(BindError::InvalidBoundValue(_))),
+                "binding to {v:?} should be rejected"
+            );
+        }
+        // A legitimate value still binds.
+        let mut ok = Binding::new();
+        ok.insert("vector_store_id".to_string(), "vs_alice".to_string());
+        assert!(ec.bind_requirements(&r, &ok).is_ok());
+    }
+
+    #[test]
+    fn bind_requirements_no_placeholder_is_unchanged() {
+        let ec = EntitlementsChecker::new(vec![], "bearer".to_string());
+        let r = reqs("bearer", &["functions:/api/v1/files:read"]);
+        assert_eq!(ec.bind_requirements(&r, &Binding::new()).unwrap(), r);
+    }
+
+    #[test]
+    fn bind_requirements_multiple_and_superset() {
+        let ec = EntitlementsChecker::new(vec![], "bearer".to_string());
+        let r = reqs("bearer", &["vector_stores:{vector_store_id}:write", "files:{file_id}:read"]);
+        let mut b = Binding::new();
+        b.insert("vector_store_id".to_string(), "vs_alice".to_string());
+        b.insert("file_id".to_string(), "file_1".to_string());
+        b.insert("unused".to_string(), "ignored".to_string());
+
+        let bound = ec.bind_requirements(&r, &b).unwrap();
+        let held = ents("bearer", &["vector_stores:vs_alice:all", "files:file_1:read"]);
+        assert!(ec.verify(&held, &bound));
+    }
+
+    #[test]
+    fn held_side_placeholder_is_literal() {
+        let ec = EntitlementsChecker::new(vec![], "bearer".to_string());
+        let held = ents("bearer", &["vector_stores:{vector_store_id}:all"]);
+        assert!(
+            !ec.verify(&held, &reqs("bearer", &["vector_stores:vs_alice:write"])),
+            "a held-side placeholder must be literal text, not a wildcard"
+        );
+    }
+
+    #[test]
+    fn strict_rejects_wildcard_requirements() {
+        let held = ents("bearer", &["vector_stores:vs_alice:all"]);
+
+        // Strict off preserves existing behavior.
+        let lax = EntitlementsChecker::new(vec![], "bearer".to_string());
+        assert!(lax.verify(&held, &reqs("bearer", &["vector_stores:*:write"])));
+
+        let strict = EntitlementsChecker::new(vec![], "bearer".to_string())
+            .with_strict_requirements(true);
+        assert!(!strict.verify(&held, &reqs("bearer", &["vector_stores:*:write"])));
+        assert!(strict.verify(&held, &reqs("bearer", &["vector_stores:vs_alice:write"])));
+
+        for s in ["vector_stores:*:write", "vector_stores::write", "vector_stores:write"] {
+            assert!(
+                matches!(
+                    strict.bind_requirements(&reqs("bearer", &[s]), &Binding::new()),
+                    Err(BindError::WildcardRequirement(_))
+                ),
+                "{s} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_unbound_placeholder_fails_closed() {
+        let strict = EntitlementsChecker::new(vec![], "bearer".to_string())
+            .with_strict_requirements(true);
+        let admin = ents("bearer", &["vector_stores::all"]);
+        assert!(!strict.verify(&admin, &reqs("bearer", &["vector_stores:{vector_store_id}:write"])));
+    }
+
+    #[test]
+    fn wildcard_requirements_inventory() {
+        let ec = EntitlementsChecker::new(vec![], "bearer".to_string());
+        let r = reqs("bearer", &[
+            "functions:/api/v1/ingest:read",
+            "vector_stores:*:write",
+            "apitokens:mint",
+            "vector_stores:*:write",
+            "vector_stores:{vector_store_id}:write",
+            "vector_stores_create",
+        ]);
+        assert_eq!(
+            ec.wildcard_requirements(&r),
+            vec!["vector_stores:*:write".to_string(), "apitokens:mint".to_string()]
+        );
+        assert!(ec.wildcard_requirements(&reqs("bearer", &["users:me:read"])).is_empty());
     }
 }
