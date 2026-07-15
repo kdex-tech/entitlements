@@ -305,7 +305,11 @@ migration drains. The Go module path is unaffected — `v1` needs no `/v2` suffi
 
 ## Companion tracks (not this repo)
 
-Filed separately; neither blocks `v0.4.0`.
+Filed separately; none blocks `v0.4.0`.
+
+- [recoursellm-group/multi-modal-store#360](https://gitlab.com/recoursellm-group/multi-modal-store/-/work_items/360) — knowdb: remove the `system` fallback
+- [recoursellm-group/multi-modal-store#361](https://gitlab.com/recoursellm-group/multi-modal-store/-/work_items/361) — knowdb: the `Wildcard` default synthesizes `*`
+- [kdex-tech/kdex-crds#15](https://github.com/kdex-tech/kdex-crds/issues/15) — kdex-crds: first-class opaque grants
 
 - **knowdb — remove the `system` fallback.** `resolve_requirement`
   (`src/auth/entitlements.rs:757`) defaults an unresolved store to `system` on 9
