@@ -293,6 +293,35 @@ impl EntitlementsChecker {
         reqs: &Requirements,
         b: &Binding,
     ) -> Result<Requirements, BindError> {
+        // Two passes, mirroring the Go reference (`go/entitlements.go`,
+        // `BindRequirements`): under strict mode, sweep EVERY requirement for
+        // a wildcard resourceName first, and only then resolve placeholders.
+        //
+        // A single interleaved pass (checking wildcard-ness and resolving a
+        // placeholder for each item as we go) makes the reported error
+        // depend on the item's position in the list: an unbound placeholder
+        // earlier in a requirement set would return UnboundPlaceholder before
+        // a wildcard later in the same set is ever reached, while the same
+        // set reversed would return WildcardRequirement. Go always reports
+        // WildcardRequirement regardless of position because it scans
+        // everything up front. Do not "simplify" this back into one pass —
+        // that would silently reintroduce order-dependent errors and drift
+        // from the Go reference (see strict_wildcard_error_is_order_independent).
+        if self.strict_requirements {
+            for set in reqs {
+                for list in set.values() {
+                    for s in list {
+                        let p = Pattern::parse(s);
+                        if p.placeholder().is_none() && p.is_wildcard_name() {
+                            return Err(BindError::WildcardRequirement(s.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        // The sweep above already guarantees no wildcard resourceName
+        // remains, so this pass only needs to resolve placeholders.
         let mut out = Requirements::with_capacity(reqs.len());
         for set in reqs {
             let mut new_set = RequirementSet::new();
@@ -300,10 +329,6 @@ impl EntitlementsChecker {
                 let mut new_list = Vec::with_capacity(list.len());
                 for s in list {
                     let p = Pattern::parse(s);
-                    if self.strict_requirements && p.placeholder().is_none() && p.is_wildcard_name()
-                    {
-                        return Err(BindError::WildcardRequirement(s.clone()));
-                    }
                     match p.placeholder() {
                         None => new_list.push(s.clone()),
                         Some(key) => {
@@ -982,6 +1007,25 @@ mod tests {
                 "{s} should be rejected"
             );
         }
+
+        // A wildcard requirement is illegal by SPELLING — a genuine wildcard
+        // grant does not rescue it. (Parity with Go's
+        // TestStrictRejectsWildcardRequirement.)
+        assert!(
+            !strict.verify(
+                &ents("bearer", &["vector_stores::all"]),
+                &reqs("bearer", &["vector_stores:*:write"])
+            ),
+            "a wildcard requirement is illegal regardless of the grant"
+        );
+
+        // Opaque and concrete requirements bind cleanly under strict.
+        for s in ["vector_stores_create", "functions:/api/v1/files:read"] {
+            assert!(
+                strict.bind_requirements(&reqs("bearer", &[s]), &Binding::new()).is_ok(),
+                "{s} should bind cleanly under strict"
+            );
+        }
     }
 
     #[test]
@@ -990,6 +1034,29 @@ mod tests {
             .with_strict_requirements(true);
         let admin = ents("bearer", &["vector_stores::all"]);
         assert!(!strict.verify(&admin, &reqs("bearer", &["vector_stores:{vector_store_id}:write"])));
+    }
+
+    #[test]
+    fn strict_wildcard_error_is_order_independent() {
+        // Strict scans all requirements before resolving placeholders, so the
+        // wildcard error wins regardless of position. A single interleaved pass
+        // would return UnboundPlaceholder for the first ordering and
+        // WildcardRequirement for the second — order-dependent, and drift from
+        // the Go reference.
+        let strict = EntitlementsChecker::new(vec![], "bearer".to_string())
+            .with_strict_requirements(true);
+        for list in [
+            ["vector_stores:{vector_store_id}:write", "vector_stores:*:read"],
+            ["vector_stores:*:read", "vector_stores:{vector_store_id}:write"],
+        ] {
+            assert!(
+                matches!(
+                    strict.bind_requirements(&reqs("bearer", &list), &Binding::new()),
+                    Err(BindError::WildcardRequirement(_))
+                ),
+                "wildcard must win regardless of order: {list:?}"
+            );
+        }
     }
 
     #[test]
