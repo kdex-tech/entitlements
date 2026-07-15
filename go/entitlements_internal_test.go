@@ -76,6 +76,25 @@ func TestBindRequirementsUnbound(t *testing.T) {
 	}
 }
 
+func TestBindRequirementsInvalidBoundValue(t *testing.T) {
+	ec := NewEntitlementsChecker(nil, "bearer", false)
+	reqs := ec.ParseRequirements(Requirements{{"bearer": {"vector_stores:{vector_store_id}:write"}}})
+
+	// "" and "*" are the wildcard spelling, not a concrete resourceName. Binding
+	// one would widen the requirement to every store — fail like an unbound
+	// placeholder instead.
+	for _, v := range []string{"", "*"} {
+		if _, err := ec.BindRequirements(reqs, Binding{"vector_store_id": v}); !errors.Is(err, ErrInvalidBoundValue) {
+			t.Errorf("bound to %q: expected ErrInvalidBoundValue, got %v", v, err)
+		}
+	}
+
+	// A legitimate value still binds.
+	if _, err := ec.BindRequirements(reqs, Binding{"vector_store_id": "vs_alice"}); err != nil {
+		t.Errorf("unexpected error binding a concrete value: %v", err)
+	}
+}
+
 func TestBindRequirementsNoPlaceholderIsNoOp(t *testing.T) {
 	ec := NewEntitlementsChecker(nil, "bearer", false)
 	reqs := ec.ParseRequirements(Requirements{{"bearer": {"functions:/api/v1/files:read"}}})

@@ -203,6 +203,12 @@ type Binding map[string]string
 // unbound placeholder is a configuration error, never a pass. Keys in b that
 // match no placeholder are ignored, so a caller may pass a superset (e.g.
 // every path value it resolved) without knowing the requirement.
+//
+// Returns ErrInvalidBoundValue if a placeholder is bound to "" or "*". Those
+// are the wildcard spelling of a resourceName, not a concrete value: binding
+// one would silently widen the requirement to the whole resource class. A
+// binder that could not resolve a value must fail like an unbound placeholder
+// rather than widen the gate.
 func (ec *EntitlementsChecker) BindRequirements(reqs ParsedRequirements, b Binding) (ParsedRequirements, error) {
 	if !reqs.hasPlaceholder {
 		return reqs, nil
@@ -222,6 +228,10 @@ func (ec *EntitlementsChecker) BindRequirements(reqs ParsedRequirements, b Bindi
 				if !ok {
 					return ParsedRequirements{}, fmt.Errorf("%w: %q in requirement %q",
 						ErrUnboundPlaceholder, p.placeholder, p.raw)
+				}
+				if isWildcardName(v) {
+					return ParsedRequirements{}, fmt.Errorf("%w: %q bound to %q in requirement %q",
+						ErrInvalidBoundValue, p.placeholder, v, p.raw)
 				}
 				// Construct directly rather than re-parsing: a bound value
 				// containing ':' would otherwise be re-split into the wrong
@@ -492,6 +502,13 @@ type entitlementPattern struct {
 // unbound placeholder is an error, never a pass.
 var ErrUnboundPlaceholder = errors.New("entitlements: unbound placeholder in requirement")
 
+// ErrInvalidBoundValue is returned by BindRequirements when a Binding maps a
+// placeholder to "" or "*". Those are the wildcard spelling, not a concrete
+// resourceName: binding one would silently widen the requirement to the whole
+// resource class. A binder that could not resolve a value must fail like an
+// unbound placeholder rather than widen the gate by accident.
+var ErrInvalidBoundValue = errors.New("entitlements: bound value must not be empty or a wildcard")
+
 // placeholderKey returns the binding key when resourceName has the form
 // "{key}", else "". "{}" is a literal resourceName, not a placeholder.
 func placeholderKey(resourceName string) string {
@@ -506,8 +523,6 @@ func placeholderKey(resourceName string) string {
 // isWildcardName reports whether a resourceName is a wildcard. Empty is the
 // parsed form of both the short (<resource>:<verb>) and medium
 // (<resource>::<verb>) syntaxes.
-//
-//nolint:unused // consumed by strict-mode requirement checking (issue #4, follow-up task).
 func isWildcardName(n string) bool {
 	return n == "" || n == "*"
 }

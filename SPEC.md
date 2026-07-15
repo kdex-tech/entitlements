@@ -67,6 +67,10 @@ Held-side placeholders are meaningless and are treated as literal text.
   `bindRequirements`, never a pass. This is the point of the form: an author who
   declares `{vector_store_id}` on a route whose enforcing layer supplies nothing
   gets a loud configuration error rather than a silent admit.
+- A placeholder bound to `""` or `*` is an **error**. Those are the wildcard
+  spelling, not a concrete resource name: binding one would silently widen the
+  requirement to the whole resource class. A binder that could not resolve a
+  value must fail like an unbound placeholder rather than widen the gate.
 - An unbound placeholder that reaches verification **without** passing through
   `bindRequirements` behaves by mode. With strict **off** (the default) it is an
   ordinary literal resource name: it fails to match a specific grant, but a held
