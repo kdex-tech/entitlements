@@ -3,6 +3,9 @@ import {
   EntitlementsChecker,
   verifyAttenuation,
   compact,
+  UnboundPlaceholderError,
+  WildcardRequirementError,
+  InvalidBoundValueError,
   type Entitlements,
   type Requirements,
 } from "./index.js";
@@ -948,5 +951,163 @@ describe("compact", () => {
       expect(orig).toBe(want);
       expect(comp).toBe(orig);
     }
+  });
+});
+
+describe("requirement placeholders", () => {
+  it("binds a placeholder and scopes to the bound value", () => {
+    const ec = new EntitlementsChecker([], "bearer", false);
+    const reqs = ec.parseRequirements([
+      { bearer: ["functions:/api/v1/files:read", "vector_stores:{vector_store_id}:write"] },
+    ]);
+    const held = ec.parseEntitlements({
+      bearer: ["functions:/api/v1/files:read", "vector_stores:vs_alice:all"],
+    });
+
+    const bound = ec.bindRequirements(reqs, { vector_store_id: "vs_alice" });
+    expect(ec.verifyParsedEntitlements(held, bound)).toBe(true);
+
+    const boundOther = ec.bindRequirements(reqs, { vector_store_id: "vs_bob" });
+    expect(ec.verifyParsedEntitlements(held, boundOther)).toBe(false);
+
+    // A held wildcard still passes a bound requirement.
+    const admin = ec.parseEntitlements({
+      bearer: ["functions:/api/v1/files:read", "vector_stores::all"],
+    });
+    expect(ec.verifyParsedEntitlements(admin, boundOther)).toBe(true);
+  });
+
+  it("throws on an unbound placeholder", () => {
+    const ec = new EntitlementsChecker([], "bearer", false);
+    const reqs = ec.parseRequirements([{ bearer: ["vector_stores:{vector_store_id}:write"] }]);
+    expect(() => ec.bindRequirements(reqs, { wrong_key: "vs_alice" })).toThrow(
+      UnboundPlaceholderError,
+    );
+    expect(() => ec.bindRequirements(reqs, {})).toThrow(UnboundPlaceholderError);
+  });
+
+  it("throws on a bound value that is empty or a wildcard", () => {
+    const ec = new EntitlementsChecker([], "bearer", false);
+    const reqs = ec.parseRequirements([{ bearer: ["vector_stores:{vector_store_id}:write"] }]);
+    // "" and "*" are the wildcard spelling, not a concrete resourceName.
+    // Binding one would widen the requirement to every store.
+    for (const v of ["", "*"]) {
+      expect(() => ec.bindRequirements(reqs, { vector_store_id: v })).toThrow(
+        InvalidBoundValueError,
+      );
+    }
+    // A legitimate value still binds.
+    expect(() => ec.bindRequirements(reqs, { vector_store_id: "vs_alice" })).not.toThrow();
+  });
+
+  it("returns a no-placeholder set unchanged", () => {
+    const ec = new EntitlementsChecker([], "bearer", false);
+    const reqs = ec.parseRequirements([{ bearer: ["functions:/api/v1/files:read"] }]);
+    expect(ec.bindRequirements(reqs, {})).toBe(reqs); // identity
+  });
+
+  it("binds multiple placeholders by name and ignores superset keys", () => {
+    const ec = new EntitlementsChecker([], "bearer", false);
+    const reqs = ec.parseRequirements([
+      { bearer: ["vector_stores:{vector_store_id}:write", "files:{file_id}:read"] },
+    ]);
+    const bound = ec.bindRequirements(reqs, {
+      vector_store_id: "vs_alice",
+      file_id: "file_1",
+      unused: "ignored",
+    });
+    const held = ec.parseEntitlements({
+      bearer: ["vector_stores:vs_alice:all", "files:file_1:read"],
+    });
+    expect(ec.verifyParsedEntitlements(held, bound)).toBe(true);
+
+    expect(() => ec.bindRequirements(reqs, { vector_store_id: "vs_alice" })).toThrow(
+      UnboundPlaceholderError,
+    );
+  });
+
+  it("treats a held-side placeholder as literal text", () => {
+    const ec = new EntitlementsChecker([], "bearer", false);
+    const held = ec.parseEntitlements({ bearer: ["vector_stores:{vector_store_id}:all"] });
+    const reqs = ec.parseRequirements([{ bearer: ["vector_stores:vs_alice:write"] }]);
+    expect(ec.verifyParsedEntitlements(held, reqs)).toBe(false);
+  });
+});
+
+describe("strict requirements", () => {
+  it("preserves existing behavior when off and rejects the escalation when on", () => {
+    const held = { bearer: ["vector_stores:vs_alice:all"] };
+    const reqs: Requirements = [{ bearer: ["vector_stores:*:write"] }];
+
+    expect(new EntitlementsChecker([], "bearer", false).verifyEntitlements(held, reqs)).toBe(true);
+
+    const strict = new EntitlementsChecker([], "bearer", false).withStrictRequirements(true);
+    expect(strict.verifyEntitlements(held, reqs)).toBe(false);
+    expect(
+      strict.verifyEntitlements(held, [{ bearer: ["vector_stores:vs_alice:write"] }]),
+    ).toBe(true);
+
+    // A wildcard requirement is illegal by SPELLING — a genuine wildcard grant
+    // does not rescue it. (Parity with Go's TestStrictRejectsWildcardRequirement.)
+    expect(
+      strict.verifyEntitlements({ bearer: ["vector_stores::all"] }, reqs),
+    ).toBe(false);
+  });
+
+  it("reports the wildcard error regardless of its position in the list", () => {
+    // Strict scans all requirements before resolving placeholders, so the
+    // wildcard error wins regardless of order. A single interleaved pass would
+    // throw UnboundPlaceholderError for the first ordering and
+    // WildcardRequirementError for the second — order-dependent, and drift from
+    // the Go reference.
+    const strict = new EntitlementsChecker([], "bearer", false).withStrictRequirements(true);
+    for (const entries of [
+      ["vector_stores:{vector_store_id}:write", "vector_stores:*:read"],
+      ["vector_stores:*:read", "vector_stores:{vector_store_id}:write"],
+    ]) {
+      const reqs = strict.parseRequirements([{ bearer: entries }]);
+      expect(() => strict.bindRequirements(reqs, {})).toThrow(WildcardRequirementError);
+    }
+  });
+
+  it("throws WildcardRequirementError from bind for every wildcard spelling", () => {
+    const strict = new EntitlementsChecker([], "bearer", false).withStrictRequirements(true);
+    for (const s of ["vector_stores:*:write", "vector_stores::write", "vector_stores:write"]) {
+      const reqs = strict.parseRequirements([{ bearer: [s] }]);
+      expect(() => strict.bindRequirements(reqs, {})).toThrow(WildcardRequirementError);
+    }
+    for (const s of ["vector_stores_create", "functions:/api/v1/files:read"]) {
+      const reqs = strict.parseRequirements([{ bearer: [s] }]);
+      expect(() => strict.bindRequirements(reqs, {})).not.toThrow();
+    }
+  });
+
+  it("fails closed on an unbound placeholder, even for a wildcard grant", () => {
+    const strict = new EntitlementsChecker([], "bearer", false).withStrictRequirements(true);
+    const reqs = strict.parseRequirements([{ bearer: ["vector_stores:{vector_store_id}:write"] }]);
+    const admin = strict.parseEntitlements({ bearer: ["vector_stores::all"] });
+    expect(strict.verifyParsedEntitlements(admin, reqs)).toBe(false);
+  });
+});
+
+describe("wildcardRequirements", () => {
+  it("reports exactly what strict rejects, de-duplicated in first-seen order", () => {
+    const ec = new EntitlementsChecker([], "bearer", false);
+    expect(
+      ec.wildcardRequirements([
+        {
+          bearer: [
+            "functions:/api/v1/ingest:read",
+            "vector_stores:*:write",
+            "apitokens:mint",
+            "vector_stores:*:write",
+            "vector_stores:{vector_store_id}:write",
+            "vector_stores_create",
+          ],
+        },
+      ]),
+    ).toEqual(["vector_stores:*:write", "apitokens:mint"]);
+
+    expect(ec.wildcardRequirements([{ bearer: ["users:me:read"] }])).toEqual([]);
   });
 });

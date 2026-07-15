@@ -28,12 +28,76 @@ export type Entitlements = Record<string, string[]>;
  */
 export type Requirements = Array<Record<string, string[]>>;
 
+/**
+ * Maps a requirement placeholder key to the concrete resourceName it stands
+ * for, e.g. { vector_store_id: "vs_abc" }.
+ */
+export type Binding = Record<string, string>;
+
+/**
+ * A requirement declared a {placeholder} the binding does not resolve. An
+ * unbound placeholder is an error, never a pass.
+ */
+export class UnboundPlaceholderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnboundPlaceholderError";
+  }
+}
+
+/**
+ * Strict mode: a requirement's resourceName is a wildcard. Wildcards are
+ * meaningful only on the held side; as a requirement the spelling is ambiguous.
+ * Use a {placeholder} for the resource being addressed, or an opaque scope for
+ * a context-less capability.
+ */
+export class WildcardRequirementError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WildcardRequirementError";
+  }
+}
+
+/**
+ * A placeholder was bound to "" or "*" — the wildcard spelling, not a concrete
+ * resourceName. Binding one would silently widen the requirement to the whole
+ * resource class, so a binder that could not resolve a value fails here rather
+ * than widening the gate.
+ */
+export class InvalidBoundValueError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidBoundValueError";
+  }
+}
+
+/**
+ * The binding key when resourceName has the form "{key}", else "". "{}" is a
+ * literal resourceName, not a placeholder.
+ */
+function placeholderKey(resourceName: string): string {
+  if (resourceName.length > 2 && resourceName.startsWith("{") && resourceName.endsWith("}")) {
+    return resourceName.slice(1, -1);
+  }
+  return "";
+}
+
+/**
+ * Whether a resourceName is a wildcard. Empty is the parsed form of both the
+ * short (<resource>:<verb>) and medium (<resource>::<verb>) syntaxes.
+ */
+function isWildcardName(n: string): boolean {
+  return n === "" || n === "*";
+}
+
 interface EntitlementPattern {
   raw: string;
   resource: string;
   resourceName: string;
   verb: string;
   isPattern: boolean;
+  /** Binding key when resourceName is "{key}", else "". Requirement-side only. */
+  placeholder: string;
 }
 
 /** Parsed entitlements held for reuse across multiple verifications. */
@@ -44,6 +108,8 @@ export interface ParsedEntitlements {
 /** Parsed requirements held for reuse across multiple verifications. */
 export interface ParsedRequirements {
   readonly patterns: Array<Record<string, EntitlementPattern[]>>;
+  /** Precomputed so bindRequirements can no-op on sets with no placeholder. */
+  readonly hasPlaceholder: boolean;
 }
 
 const MAX_CACHE_SIZE = 10_000;
@@ -85,7 +151,7 @@ function matches(ep: EntitlementPattern, req: EntitlementPattern): boolean {
 
 function parsePattern(s: string): EntitlementPattern {
   if (!s.includes(":")) {
-    return { raw: s, resource: "", resourceName: "", verb: "", isPattern: false };
+    return { raw: s, resource: "", resourceName: "", verb: "", isPattern: false, placeholder: "" };
   }
 
   const parts = s.split(":");
@@ -97,6 +163,7 @@ function parsePattern(s: string): EntitlementPattern {
       resourceName: "",
       verb: parts[1]!,
       isPattern: true,
+      placeholder: "",
     };
   } else if (parts.length === 3) {
     return {
@@ -105,11 +172,12 @@ function parsePattern(s: string): EntitlementPattern {
       resourceName: parts[1]!,
       verb: parts[2]!,
       isPattern: true,
+      placeholder: placeholderKey(parts[1]!),
     };
   }
 
   // Too many colons → treat as opaque (matches Go behavior).
-  return { raw: s, resource: "", resourceName: "", verb: "", isPattern: false };
+  return { raw: s, resource: "", resourceName: "", verb: "", isPattern: false, placeholder: "" };
 }
 
 /**
@@ -220,6 +288,7 @@ export class EntitlementsChecker {
   readonly grantReadyByDefault: boolean;
   private readonly anonymousPatterns: EntitlementPattern[];
   private basePatterns: EntitlementPattern[] = [];
+  private strictRequirements = false;
   private readonly cache = new Map<string, EntitlementPattern>();
 
   constructor(
@@ -248,6 +317,110 @@ export class EntitlementsChecker {
   withBaseEntitlements(patterns: readonly string[]): this {
     this.basePatterns = patterns.map((s) => this.parsePattern(s));
     return this;
+  }
+
+  /**
+   * Rejects wildcard resourceNames on the requirement side. Never affects
+   * entitlements, where wildcards remain meaningful.
+   *
+   * When enabled, bindRequirements throws WildcardRequirementError (the loud
+   * path) and verification treats both a wildcard requirement and an unbound
+   * placeholder as unsatisfiable (a fail-closed backstop for callers that skip
+   * binding).
+   *
+   * Defaults to false; a future major version will default it to true.
+   */
+  withStrictRequirements(strict: boolean): EntitlementsChecker {
+    this.strictRequirements = strict;
+    return this;
+  }
+
+  /**
+   * The requirement strings whose resourceName is a wildcard — exactly what
+   * strict mode rejects. De-duplicated, first-seen order; empty means
+   * strict-clean. Use it to inventory a migration.
+   */
+  wildcardRequirements(reqs: Requirements): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const set of reqs) {
+      for (const list of Object.values(set)) {
+        for (const s of list) {
+          const p = this.parsePattern(s);
+          if (!p.isPattern || p.placeholder !== "" || !isWildcardName(p.resourceName)) continue;
+          if (seen.has(s)) continue;
+          seen.add(s);
+          out.push(s);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Substitutes every {placeholder} resourceName in `reqs` with its value from
+   * `binding` and returns the rewritten requirements. Sets containing no
+   * placeholder are returned unchanged (identity).
+   *
+   * @throws {UnboundPlaceholderError} a placeholder has no entry in `binding` —
+   *   an unbound placeholder is a configuration error, never a pass. Keys that
+   *   match no placeholder are ignored, so a caller may pass a superset.
+   * @throws {WildcardRequirementError} strict mode, wildcard requirement.
+   */
+  bindRequirements(reqs: ParsedRequirements, binding: Binding): ParsedRequirements {
+    if (this.strictRequirements) {
+      for (const set of reqs.patterns) {
+        for (const list of Object.values(set)) {
+          for (const p of list) {
+            if (p.isPattern && p.placeholder === "" && isWildcardName(p.resourceName)) {
+              throw new WildcardRequirementError(
+                `wildcard resourceName is not allowed in requirement "${p.raw}"`,
+              );
+            }
+          }
+        }
+      }
+    }
+
+    if (!reqs.hasPlaceholder) {
+      return reqs;
+    }
+
+    const bound = reqs.patterns.map((set) => {
+      const newSet: Record<string, EntitlementPattern[]> = {};
+      for (const [scheme, list] of Object.entries(set)) {
+        newSet[scheme] = list.map((p) => {
+          if (p.placeholder === "") return p;
+          const v = binding[p.placeholder];
+          if (v === undefined) {
+            throw new UnboundPlaceholderError(
+              `unbound placeholder "${p.placeholder}" in requirement "${p.raw}"`,
+            );
+          }
+          // "" and "*" are the wildcard spelling, not concrete names: binding
+          // one would widen the requirement to the whole class. Fail like an
+          // unbound placeholder.
+          if (isWildcardName(v)) {
+            throw new InvalidBoundValueError(
+              `bound value must not be empty or a wildcard: "${p.placeholder}" bound to "${v}" in requirement "${p.raw}"`,
+            );
+          }
+          // Construct directly rather than re-parsing: a bound value containing
+          // ':' would otherwise be re-split into the wrong shape.
+          return {
+            raw: `${p.resource}:${v}:${p.verb}`,
+            resource: p.resource,
+            resourceName: v,
+            verb: p.verb,
+            isPattern: true,
+            placeholder: "",
+          };
+        });
+      }
+      return newSet;
+    });
+
+    return { patterns: bound, hasPlaceholder: false };
   }
 
   /**
@@ -292,14 +465,21 @@ export class EntitlementsChecker {
 
   /** Pre-parse a `Requirements` array for reuse. */
   parseRequirements(requirements: Requirements): ParsedRequirements {
+    let hasPlaceholder = false;
     const patterns = requirements.map((req) => {
       const next: Record<string, EntitlementPattern[]> = {};
       for (const [scheme, list] of Object.entries(req)) {
-        next[scheme] = list.map((s) => this.parsePattern(s));
+        next[scheme] = list.map((s) => {
+          const p = this.parsePattern(s);
+          if (p.placeholder !== "") {
+            hasPlaceholder = true;
+          }
+          return p;
+        });
       }
       return next;
     });
-    return { patterns };
+    return { patterns, hasPlaceholder };
   }
 
   /**
@@ -396,6 +576,18 @@ export class EntitlementsChecker {
     requirement: EntitlementPattern,
     isAnonymousCaller: boolean,
   ): boolean {
+    // Strict backstop for callers that skip bindRequirements: a wildcard
+    // requirement is an illegal spelling and an unbound placeholder was never
+    // resolved. Both are unsatisfiable rather than silently admitted — a held
+    // wildcard would match either.
+    if (
+      this.strictRequirements &&
+      requirement.isPattern &&
+      (requirement.placeholder !== "" || isWildcardName(requirement.resourceName))
+    ) {
+      return false;
+    }
+
     for (const e of entitlementList) {
       if (matches(e, requirement)) return true;
     }
