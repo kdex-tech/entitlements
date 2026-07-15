@@ -1,6 +1,7 @@
 package entitlements
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -103,6 +104,9 @@ type ParsedEntitlements struct {
 // pre-parsed into internal patterns for high-performance verification.
 type ParsedRequirements struct {
 	patterns []map[string][]entitlementPattern
+	// hasPlaceholder is precomputed so BindRequirements can no-op on the
+	// (common) requirement sets that contain no placeholder.
+	hasPlaceholder bool
 }
 
 // Requirements is a slice of maps representing alternative security requirement sets.
@@ -169,18 +173,72 @@ func (ec *EntitlementsChecker) ParseEntitlements(entitlements Entitlements) Pars
 // efficient reuse in multiple verification calls.
 func (ec *EntitlementsChecker) ParseRequirements(requirements Requirements) ParsedRequirements {
 	parsed := make([]map[string][]entitlementPattern, len(requirements))
+	hasPlaceholder := false
 	for i, req := range requirements {
 		newReq := make(map[string][]entitlementPattern, len(req))
 		for scheme, list := range req {
 			patterns := make([]entitlementPattern, len(list))
 			for j, s := range list {
 				patterns[j] = ec.parsePattern(s)
+				if patterns[j].placeholder != "" {
+					hasPlaceholder = true
+				}
 			}
 			newReq[scheme] = patterns
 		}
 		parsed[i] = newReq
 	}
-	return ParsedRequirements{patterns: parsed}
+	return ParsedRequirements{patterns: parsed, hasPlaceholder: hasPlaceholder}
+}
+
+// Binding maps a requirement placeholder key to the concrete resourceName it
+// stands for, e.g. {"vector_store_id": "vs_abc"}.
+type Binding map[string]string
+
+// BindRequirements substitutes every {placeholder} resourceName in reqs with
+// its value from b and returns the rewritten requirements. Requirement sets
+// containing no placeholder are returned unchanged.
+//
+// Returns ErrUnboundPlaceholder if any placeholder has no entry in b — an
+// unbound placeholder is a configuration error, never a pass. Keys in b that
+// match no placeholder are ignored, so a caller may pass a superset (e.g.
+// every path value it resolved) without knowing the requirement.
+func (ec *EntitlementsChecker) BindRequirements(reqs ParsedRequirements, b Binding) (ParsedRequirements, error) {
+	if !reqs.hasPlaceholder {
+		return reqs, nil
+	}
+
+	bound := make([]map[string][]entitlementPattern, len(reqs.patterns))
+	for i, set := range reqs.patterns {
+		newSet := make(map[string][]entitlementPattern, len(set))
+		for scheme, list := range set {
+			newList := make([]entitlementPattern, len(list))
+			for j, p := range list {
+				if p.placeholder == "" {
+					newList[j] = p
+					continue
+				}
+				v, ok := b[p.placeholder]
+				if !ok {
+					return ParsedRequirements{}, fmt.Errorf("%w: %q in requirement %q",
+						ErrUnboundPlaceholder, p.placeholder, p.raw)
+				}
+				// Construct directly rather than re-parsing: a bound value
+				// containing ':' would otherwise be re-split into the wrong
+				// shape. Callers encode such values at their boundary.
+				newList[j] = entitlementPattern{
+					raw:          p.resource + ":" + v + ":" + p.verb,
+					resource:     p.resource,
+					resourceName: v,
+					verb:         p.verb,
+					isPattern:    true,
+				}
+			}
+			newSet[scheme] = newList
+		}
+		bound[i] = newSet
+	}
+	return ParsedRequirements{patterns: bound, hasPlaceholder: false}, nil
 }
 
 // VerifyEntitlements checks if the user's entitlements satisfy the given security requirements.
@@ -369,6 +427,7 @@ func (ec *EntitlementsChecker) parsePattern(s string) entitlementPattern {
 				resourceName: parts[1],
 				verb:         parts[2],
 				isPattern:    true,
+				placeholder:  placeholderKey(parts[1]),
 			}
 		} else {
 			// Opaque form or invalid structure (e.g. too many colons)
@@ -422,6 +481,35 @@ type entitlementPattern struct {
 	resourceName string
 	verb         string
 	isPattern    bool
+	// placeholder is the binding key when resourceName is "{key}", else "".
+	// Meaningful only on the requirement side; held-side placeholders are
+	// literal text.
+	placeholder string
+}
+
+// ErrUnboundPlaceholder is returned by BindRequirements when a requirement
+// declares a {placeholder} that the supplied Binding does not resolve. An
+// unbound placeholder is an error, never a pass.
+var ErrUnboundPlaceholder = errors.New("entitlements: unbound placeholder in requirement")
+
+// placeholderKey returns the binding key when resourceName has the form
+// "{key}", else "". "{}" is a literal resourceName, not a placeholder.
+func placeholderKey(resourceName string) string {
+	if len(resourceName) > 2 &&
+		strings.HasPrefix(resourceName, "{") &&
+		strings.HasSuffix(resourceName, "}") {
+		return resourceName[1 : len(resourceName)-1]
+	}
+	return ""
+}
+
+// isWildcardName reports whether a resourceName is a wildcard. Empty is the
+// parsed form of both the short (<resource>:<verb>) and medium
+// (<resource>::<verb>) syntaxes.
+//
+//nolint:unused // consumed by strict-mode requirement checking (issue #4, follow-up task).
+func isWildcardName(n string) bool {
+	return n == "" || n == "*"
 }
 
 // isAnonymousCaller returns true iff the caller provided no entitlements
