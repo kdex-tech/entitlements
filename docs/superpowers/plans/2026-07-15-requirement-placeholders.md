@@ -21,6 +21,7 @@
 - **A placeholder bound to `""` or `"*"` is an error** — `ErrInvalidBoundValue` (Go) / `BindError::InvalidBoundValue` (Rust) / `InvalidBoundValueError` (Python, TypeScript). Those are the wildcard spelling, not concrete resourceNames: binding one would silently widen the requirement to the whole class, which is the same escalation the placeholder form exists to prevent. A binder that could not resolve a value must fail like an unbound placeholder. *(Added during execution after a Task 2 review finding; approved by the human. Already implemented in Go — Tasks 4-6 must mirror it.)*
 - **Wildcard resourceName** means `""` or `"*"`. Note Go/TS parse the short form (`a:b`) to `resourceName: ""` but **Rust/Python parse it to `name: "*"`** — both must be treated as wildcards.
 - **Held-side placeholders are literal text.** Only requirements are bound.
+- **Strict scans before it binds — two passes, not one.** Every port's bind must sweep *all* requirements for a wildcard resourceName and raise **before** resolving any placeholder. A single interleaved pass makes the reported error depend on list position: `["x:{id}:write", "x:*:read"]` raises unbound-placeholder, and the same list reversed raises wildcard-requirement. Both fail closed, but the *variant* differs — which is cross-port drift, and a caller branching on it breaks. *(Found empirically during Task 4 review: Go and TypeScript two-pass; Rust and Python interleaved. Approved for fixing in all four.)*
 - **Never touch** `Dominates`/`dominates`, `VerifyAttenuation`/`verify_attenuation`, or `Compact`/`compact`. They govern mint-time attenuation, not requirements.
 - **Do not add `ParsedRequirements` to Rust or Python.** They parse inline; binding raw `Requirements` costs them nothing.
 - **Coverage target >80%** per `SPEC.md`; each port has `make coverage`.
@@ -1215,9 +1216,34 @@ def test_strict_rejects_wildcard_requirements():
     assert not strict.verify(held, [{"bearer": ["vector_stores:*:write"]}])
     assert strict.verify(held, [{"bearer": ["vector_stores:vs_alice:write"]}])
 
+    # A wildcard requirement is illegal by SPELLING — a genuine wildcard grant
+    # does not rescue it. (Parity with Go's TestStrictRejectsWildcardRequirement.)
+    assert not strict.verify(
+        {"bearer": ["vector_stores::all"]}, [{"bearer": ["vector_stores:*:write"]}]
+    )
+
     for s in ("vector_stores:*:write", "vector_stores::write", "vector_stores:write"):
         with pytest.raises(WildcardRequirementError):
             strict.bind_requirements([{"bearer": [s]}], {})
+
+    # Opaque and concrete requirements bind cleanly under strict — no false reject.
+    for s in ("vector_stores_create", "functions:/api/v1/files:read"):
+        strict.bind_requirements([{"bearer": [s]}], {})
+
+
+def test_strict_wildcard_error_is_order_independent():
+    # Strict scans all requirements before resolving placeholders, so the
+    # wildcard error wins regardless of position. A single interleaved pass would
+    # raise UnboundPlaceholderError for the first ordering and
+    # WildcardRequirementError for the second — order-dependent, and drift from
+    # the Go reference.
+    strict = EntitlementsChecker().with_strict_requirements(True)
+    for entries in (
+        ["vector_stores:{vector_store_id}:write", "vector_stores:*:read"],
+        ["vector_stores:*:read", "vector_stores:{vector_store_id}:write"],
+    ):
+        with pytest.raises(WildcardRequirementError):
+            strict.bind_requirements([{"bearer": entries}], {})
 
 
 def test_strict_unbound_placeholder_fails_closed():
@@ -1339,6 +1365,22 @@ Add after `with_base_entitlements`:
         Raises WildcardRequirementError under strict mode for a wildcard
         requirement.
         """
+        # Strict scans EVERY requirement before any placeholder is resolved, so a
+        # wildcard is reported deterministically no matter where it sits in the
+        # list. Mirrors the Go reference. A single interleaved pass would make the
+        # raised error depend on item order: ["x:{id}:write", "x:*:read"] would
+        # raise UnboundPlaceholderError, and the same list reversed would raise
+        # WildcardRequirementError — cross-port drift.
+        if self._strict_requirements:
+            for req_set in requirements:
+                for entries in req_set.values():
+                    for s in entries:
+                        p = Pattern.parse(s)
+                        if p.placeholder is None and p.is_wildcard_name:
+                            raise WildcardRequirementError(
+                                f"wildcard resourceName is not allowed in requirement {s!r}"
+                            )
+
         out: Requirements = []
         for req_set in requirements:
             new_set: RequirementSet = {}
@@ -1347,10 +1389,6 @@ Add after `with_base_entitlements`:
                 for s in entries:
                     p = Pattern.parse(s)
                     key = p.placeholder
-                    if self._strict_requirements and key is None and p.is_wildcard_name:
-                        raise WildcardRequirementError(
-                            f"wildcard resourceName is not allowed in requirement {s!r}"
-                        )
                     if key is None:
                         new_entries.append(s)
                         continue
@@ -1546,6 +1584,28 @@ describe("strict requirements", () => {
     expect(
       strict.verifyEntitlements(held, [{ bearer: ["vector_stores:vs_alice:write"] }]),
     ).toBe(true);
+
+    // A wildcard requirement is illegal by SPELLING — a genuine wildcard grant
+    // does not rescue it. (Parity with Go's TestStrictRejectsWildcardRequirement.)
+    expect(
+      strict.verifyEntitlements({ bearer: ["vector_stores::all"] }, reqs),
+    ).toBe(false);
+  });
+
+  it("reports the wildcard error regardless of its position in the list", () => {
+    // Strict scans all requirements before resolving placeholders, so the
+    // wildcard error wins regardless of order. A single interleaved pass would
+    // throw UnboundPlaceholderError for the first ordering and
+    // WildcardRequirementError for the second — order-dependent, and drift from
+    // the Go reference.
+    const strict = new EntitlementsChecker([], "bearer", false).withStrictRequirements(true);
+    for (const entries of [
+      ["vector_stores:{vector_store_id}:write", "vector_stores:*:read"],
+      ["vector_stores:*:read", "vector_stores:{vector_store_id}:write"],
+    ]) {
+      const reqs = strict.parseRequirements([{ bearer: entries }]);
+      expect(() => strict.bindRequirements(reqs, {})).toThrow(WildcardRequirementError);
+    }
   });
 
   it("throws WildcardRequirementError from bind for every wildcard spelling", () => {
