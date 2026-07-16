@@ -59,10 +59,16 @@ export class WildcardRequirementError extends Error {
 }
 
 /**
- * A placeholder was bound to "" or "*" — the wildcard spelling, not a concrete
- * resourceName. Binding one would silently widen the requirement to the whole
- * resource class, so a binder that could not resolve a value fails here rather
- * than widening the gate.
+ * A placeholder was bound to "", "*", or a value containing ':'. "" and "*"
+ * are the wildcard spelling, not a concrete resourceName: binding one would
+ * silently widen the requirement to the whole resource class. A ':' would
+ * re-split the bound pattern into the wrong shape when re-parsed — Rust and
+ * Python have no pre-parsed type and must re-emit the bound pattern as a
+ * string that gets re-parsed, so they are exposed to that hazard even though
+ * this port and Go construct the pattern directly; rejecting the colon here
+ * too is what keeps all four ports identical. A binder that could not resolve
+ * a value must fail like an unbound placeholder rather than widen the gate or
+ * diverge across ports.
  */
 export class InvalidBoundValueError extends Error {
   constructor(message: string) {
@@ -336,9 +342,18 @@ export class EntitlementsChecker {
   }
 
   /**
-   * The requirement strings whose resourceName is a wildcard — exactly what
-   * strict mode rejects. De-duplicated, first-seen order; empty means
-   * strict-clean. Use it to inventory a migration.
+   * The requirement strings whose resourceName is a wildcard — the spellings
+   * strict mode rejects outright. De-duplicated, first-seen order.
+   *
+   * It is a migration inventory, not a complete strict-mode pre-flight:
+   * strict also rejects an unbound placeholder at verification time, which
+   * this query does not report (a placeholder is the migration's
+   * destination, not a target). An empty result means no requirement still
+   * uses a wildcard spelling.
+   *
+   * It is a pure query so a caller may log, count, or fail in its own idiom.
+   * Use it to inventory what remains to migrate before enabling
+   * withStrictRequirements.
    */
   wildcardRequirements(reqs: Requirements): string[] {
     const out: string[] = [];
@@ -398,11 +413,18 @@ export class EntitlementsChecker {
             );
           }
           // "" and "*" are the wildcard spelling, not concrete names: binding
-          // one would widen the requirement to the whole class. Fail like an
-          // unbound placeholder.
-          if (isWildcardName(v)) {
+          // one would widen the requirement to the whole class. A ':' is
+          // rejected too: although this port constructs the pattern directly
+          // below (see the comment there) rather than re-parsing it, Rust and
+          // Python have no pre-parsed type and must re-emit the bound pattern
+          // as a string that gets re-parsed — a value containing ':' would
+          // re-split into the wrong shape there and become opaque. Rejecting
+          // the colon here as well is what keeps all four ports identical
+          // instead of only the two that build the pattern directly. Fail
+          // like an unbound placeholder in every case.
+          if (isWildcardName(v) || v.includes(":")) {
             throw new InvalidBoundValueError(
-              `bound value must not be empty or a wildcard: "${p.placeholder}" bound to "${v}" in requirement "${p.raw}"`,
+              `bound value must not be empty, a wildcard, or contain ':': "${p.placeholder}" bound to "${v}" in requirement "${p.raw}"`,
             );
           }
           // Construct directly rather than re-parsing: a bound value containing

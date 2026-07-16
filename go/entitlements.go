@@ -205,11 +205,18 @@ type Binding map[string]string
 // match no placeholder are ignored, so a caller may pass a superset (e.g.
 // every path value it resolved) without knowing the requirement.
 //
-// Returns ErrInvalidBoundValue if a placeholder is bound to "" or "*". Those
-// are the wildcard spelling of a resourceName, not a concrete value: binding
-// one would silently widen the requirement to the whole resource class. A
-// binder that could not resolve a value must fail like an unbound placeholder
-// rather than widen the gate.
+// Returns ErrInvalidBoundValue if a placeholder is bound to "", "*", or a
+// value containing ':'. "" and "*" are the wildcard spelling of a
+// resourceName, not a concrete value: binding one would silently widen the
+// requirement to the whole resource class. A ':' is rejected because this
+// method constructs the bound pattern directly (see the comment below), but
+// Rust and Python have no pre-parsed type and must re-emit the bound pattern
+// as a string that verify then re-parses — there, a value containing ':'
+// re-splits into the wrong shape and the pattern silently becomes opaque.
+// Rejecting the colon here, in every port, is what keeps all four producing
+// identical results instead of fixing only the two that happen to rebuild the
+// string. A binder that could not resolve a value must fail like an unbound
+// placeholder rather than widen the gate or diverge across ports.
 //
 // Under WithStrictRequirements, also returns ErrWildcardRequirement if any
 // requirement in reqs — placeholder or not — has a wildcard resourceName (""
@@ -249,7 +256,7 @@ func (ec *EntitlementsChecker) BindRequirements(reqs ParsedRequirements, b Bindi
 					return ParsedRequirements{}, fmt.Errorf("%w: %q in requirement %q",
 						ErrUnboundPlaceholder, p.placeholder, p.raw)
 				}
-				if isWildcardName(v) {
+				if isWildcardName(v) || strings.Contains(v, ":") {
 					return ParsedRequirements{}, fmt.Errorf("%w: %q bound to %q in requirement %q",
 						ErrInvalidBoundValue, p.placeholder, v, p.raw)
 				}
@@ -602,11 +609,16 @@ var ErrUnboundPlaceholder = errors.New("entitlements: unbound placeholder in req
 var ErrWildcardRequirement = errors.New("entitlements: wildcard resourceName is not allowed in a requirement")
 
 // ErrInvalidBoundValue is returned by BindRequirements when a Binding maps a
-// placeholder to "" or "*". Those are the wildcard spelling, not a concrete
-// resourceName: binding one would silently widen the requirement to the whole
-// resource class. A binder that could not resolve a value must fail like an
-// unbound placeholder rather than widen the gate by accident.
-var ErrInvalidBoundValue = errors.New("entitlements: bound value must not be empty or a wildcard")
+// placeholder to "", "*", or a value containing ':'. "" and "*" are the
+// wildcard spelling, not a concrete resourceName: binding one would silently
+// widen the requirement to the whole resource class. A ':' would re-split the
+// bound pattern into the wrong shape when re-parsed — Rust and Python rebuild
+// the pattern as a string and are exposed to that hazard, while Go and
+// TypeScript construct it directly and are not; rejecting the colon in all
+// four ports is what keeps their results identical. A binder that could not
+// resolve a value must fail like an unbound placeholder rather than widen the
+// gate or diverge across ports.
+var ErrInvalidBoundValue = errors.New("entitlements: bound value must not be empty, a wildcard, or contain ':'")
 
 // placeholderKey returns the binding key when resourceName has the form
 // "{key}", else "". "{}" is a literal resourceName, not a placeholder.

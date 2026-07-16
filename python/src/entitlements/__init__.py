@@ -25,10 +25,16 @@ class WildcardRequirementError(BindError):
 
 
 class InvalidBoundValueError(BindError):
-    """A placeholder was bound to "" or "*" — the wildcard spelling, not a
-    concrete resource name. Binding one would silently widen the requirement to
-    the whole resource class, so a binder that could not resolve a value fails
-    here rather than widening the gate."""
+    """A placeholder was bound to "", "*", or a value containing ':'. "" and
+    "*" are the wildcard spelling, not a concrete resource name: binding one
+    would silently widen the requirement to the whole resource class. A ':' is
+    rejected because this port has no pre-parsed type and must re-emit the
+    bound pattern as a string that gets re-parsed — a value containing ':'
+    would re-split into the wrong shape there, while Go/TypeScript (which
+    construct the pattern directly) would not; rejecting it here keeps all
+    four ports identical. A binder that could not resolve a value must fail
+    like an unbound placeholder rather than widen the gate or diverge across
+    ports."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -246,11 +252,20 @@ class EntitlementsChecker:
                     v = binding[key]
                     # "" and "*" are the wildcard spelling, not concrete names:
                     # binding one would widen the requirement to the whole
-                    # class. Fail like an unbound placeholder.
-                    if v in ("", "*"):
+                    # class. ":" is rejected too: this port has no pre-parsed
+                    # type and must re-emit the bound pattern as an f-string
+                    # below, which Pattern.parse then re-splits on ":" — a
+                    # bound value containing one would re-split into the wrong
+                    # shape and the pattern would silently become opaque,
+                    # diverging from Go/TypeScript, which construct the
+                    # pattern directly and never re-split it. Rejecting the
+                    # colon here is what keeps all four ports identical. Fail
+                    # like an unbound placeholder in every case.
+                    if v in ("", "*") or ":" in v:
                         raise InvalidBoundValueError(
-                            f"bound value must not be empty or a wildcard: "
-                            f"{key!r} bound to {v!r} in requirement {s!r}"
+                            f"bound value must not be empty, a wildcard, or "
+                            f"contain ':': {key!r} bound to {v!r} in "
+                            f"requirement {s!r}"
                         )
                     new_entries.append(f"{p.resource}:{v}:{p.verb}")
                 new_set[scheme] = new_entries
@@ -259,9 +274,18 @@ class EntitlementsChecker:
 
     def wildcard_requirements(self, requirements: Requirements) -> List[str]:
         """Returns the requirement strings whose resourceName is a wildcard —
-        exactly what strict mode rejects. De-duplicated, first-seen order; an
-        empty result means the requirements are strict-clean. Use it to
-        inventory a migration.
+        the spellings strict mode rejects outright. De-duplicated, first-seen
+        order.
+
+        It is a migration inventory, not a complete strict-mode pre-flight:
+        strict also rejects an unbound placeholder at verification time, which
+        this query does not report (a placeholder is the migration's
+        destination, not a target). An empty result means no requirement still
+        uses a wildcard spelling.
+
+        It is a pure query so a caller may log, count, or fail in its own
+        idiom. Use it to inventory what remains to migrate before enabling
+        with_strict_requirements.
         """
         out: List[str] = []
         for req_set in requirements:

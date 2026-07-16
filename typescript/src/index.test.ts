@@ -990,8 +990,10 @@ describe("requirement placeholders", () => {
     const ec = new EntitlementsChecker([], "bearer", false);
     const reqs = ec.parseRequirements([{ bearer: ["vector_stores:{vector_store_id}:write"] }]);
     // "" and "*" are the wildcard spelling, not a concrete resourceName.
-    // Binding one would widen the requirement to every store.
-    for (const v of ["", "*"]) {
+    // Binding one would widen the requirement to every store. "a:b" contains
+    // ':', which would re-split the bound pattern into the wrong shape on
+    // ports that rebuild it as a string (see bindRequirements).
+    for (const v of ["", "*", "a:b"]) {
       expect(() => ec.bindRequirements(reqs, { vector_store_id: v })).toThrow(
         InvalidBoundValueError,
       );

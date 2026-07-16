@@ -80,10 +80,11 @@ func TestBindRequirementsInvalidBoundValue(t *testing.T) {
 	ec := NewEntitlementsChecker(nil, "bearer", false)
 	reqs := ec.ParseRequirements(Requirements{{"bearer": {"vector_stores:{vector_store_id}:write"}}})
 
-	// "" and "*" are the wildcard spelling, not a concrete resourceName. Binding
-	// one would widen the requirement to every store — fail like an unbound
-	// placeholder instead.
-	for _, v := range []string{"", "*"} {
+	// "" and "*" are the wildcard spelling, not a concrete resourceName. "a:b"
+	// contains ':', which would re-split the bound pattern into the wrong shape
+	// on ports that rebuild it as a string. Binding any of these would widen or
+	// corrupt the requirement — fail like an unbound placeholder instead.
+	for _, v := range []string{"", "*", "a:b"} {
 		if _, err := ec.BindRequirements(reqs, Binding{"vector_store_id": v}); !errors.Is(err, ErrInvalidBoundValue) {
 			t.Errorf("bound to %q: expected ErrInvalidBoundValue, got %v", v, err)
 		}

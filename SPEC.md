@@ -71,6 +71,14 @@ Held-side placeholders are meaningless and are treated as literal text.
   spelling, not a concrete resource name: binding one would silently widen the
   requirement to the whole resource class. A binder that could not resolve a
   value must fail like an unbound placeholder rather than widen the gate.
+- A placeholder bound to a value containing `:` is an **error**. Binding
+  constructs the resulting pattern directly in Go and TypeScript, but Rust and
+  Python have no pre-parsed type and must re-emit it as a string that is then
+  re-parsed — a bound value with a `:` would re-split into the wrong shape
+  there and silently become opaque, while Go/TypeScript would keep matching.
+  Rejecting the colon in every port, rather than only fixing the two that
+  re-parse, is what keeps `bindRequirements` producing identical results
+  across all four.
 - An unbound placeholder that reaches verification **without** passing through
   `bindRequirements` behaves by mode. With strict **off** (the default) it is an
   ordinary literal resource name: it fails to match a specific grant, but a held
@@ -88,9 +96,16 @@ type in Go and TypeScript, raw `Requirements` in Rust and Python (which parse
 inline and have no pre-parsed type).
 
 `wildcardRequirements(requirements)` returns the requirement strings whose
-`resourceName` is a wildcard — exactly what strict mode rejects. It is a pure
-function so each consumer may log, count, or fail in its own idiom; it exists to
-inventory what remains to migrate before strict is enabled.
+`resourceName` is a wildcard — the spellings strict mode rejects outright.
+Results are de-duplicated and in first-seen order.
+
+It is a migration inventory, not a complete strict-mode pre-flight: strict also
+rejects an unbound placeholder at verification time, which this query does not
+report (a placeholder is the migration's destination, not a target). An empty
+result means no requirement still uses a wildcard spelling.
+
+It is a pure function so each consumer may log, count, or fail in its own
+idiom. Use it to inventory what remains to migrate before enabling strict mode.
 
 All language ports MUST produce identical results.
 

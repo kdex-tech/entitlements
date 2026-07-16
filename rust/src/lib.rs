@@ -25,10 +25,16 @@ pub enum BindError {
     /// Strict mode: a requirement's resourceName is a wildcard. Carries the
     /// offending requirement string.
     WildcardRequirement(String),
-    /// A placeholder was bound to "" or "*" — the wildcard spelling, not a
-    /// concrete resourceName. Binding one would silently widen the requirement
-    /// to the whole resource class, so a binder that could not resolve a value
-    /// fails here rather than widening the gate. Carries the offending
+    /// A placeholder was bound to "", "*", or a value containing ':'. "" and
+    /// "*" are the wildcard spelling, not a concrete resourceName: binding one
+    /// would silently widen the requirement to the whole resource class. A
+    /// ':' is rejected because this port has no pre-parsed type and must
+    /// re-emit the bound pattern as a string that gets re-parsed — a value
+    /// containing ':' would re-split into the wrong shape there, while
+    /// Go/TypeScript (which construct the pattern directly) would not;
+    /// rejecting it here keeps all four ports identical. A binder that could
+    /// not resolve a value must fail like an unbound placeholder rather than
+    /// widen the gate or diverge across ports. Carries the offending
     /// requirement string.
     InvalidBoundValue(String),
 }
@@ -41,7 +47,7 @@ impl std::fmt::Display for BindError {
                 write!(f, "wildcard resourceName is not allowed in requirement {s:?}")
             }
             Self::InvalidBoundValue(s) => {
-                write!(f, "bound value must not be empty or a wildcard, in requirement {s:?}")
+                write!(f, "bound value must not be empty, a wildcard, or contain ':', in requirement {s:?}")
             }
         }
     }
@@ -337,8 +343,17 @@ impl EntitlementsChecker {
                                 .ok_or_else(|| BindError::UnboundPlaceholder(s.clone()))?;
                             // "" and "*" are the wildcard spelling, not concrete
                             // names: binding one would widen the requirement to
-                            // the whole class. Fail like an unbound placeholder.
-                            if v.is_empty() || v == "*" {
+                            // the whole class. A ':' is rejected too: this port
+                            // has no pre-parsed type and must re-emit the bound
+                            // pattern as a string below, which `Pattern::parse`
+                            // then re-splits on ':' — a bound value containing
+                            // one would re-split into the wrong shape and the
+                            // pattern would silently become opaque, diverging
+                            // from Go/TypeScript, which construct the pattern
+                            // directly and never re-split it. Rejecting the
+                            // colon here is what keeps all four ports identical.
+                            // Fail like an unbound placeholder in every case.
+                            if v.is_empty() || v == "*" || v.contains(':') {
                                 return Err(BindError::InvalidBoundValue(s.clone()));
                             }
                             match &p {
@@ -357,9 +372,19 @@ impl EntitlementsChecker {
         Ok(out)
     }
 
-    /// Returns the requirement strings whose resourceName is a wildcard —
-    /// exactly what strict mode rejects. De-duplicated, first-seen order; empty
-    /// means strict-clean. Use it to inventory a migration.
+    /// Returns the requirement strings whose resourceName is a wildcard — the
+    /// spellings strict mode rejects outright. De-duplicated, first-seen
+    /// order.
+    ///
+    /// It is a migration inventory, not a complete strict-mode pre-flight:
+    /// strict also rejects an unbound placeholder at verification time, which
+    /// this query does not report (a placeholder is the migration's
+    /// destination, not a target). An empty result means no requirement still
+    /// uses a wildcard spelling.
+    ///
+    /// It is a pure query so a caller may log, count, or fail in its own
+    /// idiom. Use it to inventory what remains to migrate before enabling
+    /// `with_strict_requirements`.
     pub fn wildcard_requirements(&self, reqs: &Requirements) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for set in reqs {
@@ -939,8 +964,10 @@ mod tests {
         let ec = EntitlementsChecker::new(vec![], "bearer".to_string());
         let r = reqs("bearer", &["vector_stores:{vector_store_id}:write"]);
         // "" and "*" are the wildcard spelling, not a concrete resourceName.
-        // Binding one would widen the requirement to every store.
-        for v in ["", "*"] {
+        // Binding one would widen the requirement to every store. "a:b"
+        // contains ':', which would re-split the bound pattern into the wrong
+        // shape when this port re-parses it (see bind_requirements).
+        for v in ["", "*", "a:b"] {
             let mut b = Binding::new();
             b.insert("vector_store_id".to_string(), v.to_string());
             assert!(

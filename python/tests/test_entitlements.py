@@ -347,8 +347,10 @@ def test_bind_requirements_rejects_wildcard_bound_value():
     ec = EntitlementsChecker()
     reqs = [{"bearer": ["vector_stores:{vector_store_id}:write"]}]
     # "" and "*" are the wildcard spelling, not a concrete resource name.
-    # Binding one would widen the requirement to every store.
-    for v in ("", "*"):
+    # Binding one would widen the requirement to every store. "a:b" contains
+    # ':', which would re-split the bound pattern into the wrong shape when
+    # this port re-parses it (see bind_requirements).
+    for v in ("", "*", "a:b"):
         with pytest.raises(InvalidBoundValueError):
             ec.bind_requirements(reqs, {"vector_store_id": v})
     # A legitimate value still binds.
