@@ -67,6 +67,19 @@ Held-side placeholders are meaningless and are treated as literal text.
   `bindRequirements`, never a pass. This is the point of the form: an author who
   declares `{vector_store_id}` on a route whose enforcing layer supplies nothing
   gets a loud configuration error rather than a silent admit.
+
+  **Corollary — only declare placeholders the enforcing layer can resolve.** A
+  requirement is a contract with whoever verifies it, and a placeholder is a
+  promise that that layer can supply the value. Some identities are resolvable
+  only by a *different* layer: an API addressed by `file_id` may be checked
+  against the file's owning store, a mapping that lives in the enforcer's data
+  rather than in the request. No caller context closes that gap. Naming such an
+  identity in a requirement makes `bindRequirements` fail every time, because
+  the promise cannot be kept — the error is the contract working, not an
+  obstacle to route around. Declare requirements the verifying layer can
+  resolve; publish the rest through whatever channel your enforcing layer uses
+  to advertise what a caller must hold, where nothing parses them and prose is
+  fine.
 - A placeholder bound to `""` or `*` is an **error**. Those are the wildcard
   spelling, not a concrete resource name: binding one would silently widen the
   requirement to the whole resource class. A binder that could not resolve a
