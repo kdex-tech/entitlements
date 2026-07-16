@@ -64,11 +64,36 @@ That single glob carries three distinct meanings:
 
 | requirement | actual meaning | can the enforcing layer bind it? |
 | --- | --- | --- |
-| `vector_stores:*:read` on `/vector_stores/{vector_store_id}/search` | the store in the path | **yes** — `r.PathValue("vector_store_id")` |
-| `vector_stores:*:write` on `/ingest` | the store in `X-Vector-Store-Id` | **yes** — a header |
+| `vector_stores:*:read` on `/vector_stores/{vector_store_id}/search` | the store in the path | **yes** — by re-matching the pattern (**not** `r.PathValue`; see correction) |
+| `vector_stores:*:write` on `/ingest` | ~~the store in `X-Vector-Store-Id`~~ **the store in the multipart body**, with the header only a fallback | ~~**yes** — a header~~ **no** — body-derived (see correction) |
 | `vector_stores:*:read` on `/files/{file_id}` | the *file's* store | **no** — a row property |
 | `vector_stores:*:own` on `POST /vector_stores` | genuine universal (create) | **n/a** — nothing to bind |
 | `users:*:admin` on the backoffice page | genuine universal | **n/a** — nothing to bind |
+
+> **Correction (2026-07-16) — two rows above were wrong; v0.4.0 itself is not
+> affected (the library is correct, this table's evidence was not).**
+>
+> 1. **`/ingest` is not header-bindable.** knowdb's `effective_vs`
+>    (`multi-modal-store/src/api.rs:872-883`) resolves an unscoped target as
+>    **body → header → `system`**. The multipart body wins, and no gate can read
+>    it — knowdb's own middleware can't either, which is exactly why
+>    `ingest_handler` carries the issue-#60 re-check ("*without this re-check a
+>    token scoped to any one store could ingest into another*"). Binding the
+>    header here would gate a store that isn't the target. Measured: the six
+>    routes that honor the header (`tests/suite/url_ingest_test.rs:666-673`) are
+>    precisely the six `effective_vs` callers, so **no unscoped route has an
+>    authoritative header today**.
+> 2. **`r.PathValue` does not work at the gate.** `patternMux` has empty handlers
+>    and is consulted via `Handler(r)`, which returns the pattern but never
+>    populates path values. The binder must re-match the pattern against
+>    `r.URL.Path` itself.
+>
+> The `/ingest` row is the same class of error as the row-derived `file_id` trap
+> this document already identifies — *readability is not authority*: a readable
+> but outranked source is still underivable, because deriving the fallback isn't
+> deriving the target. Resolution, the three-way route classification, and the
+> knowdb change that makes `/ingest` bindable are in
+> `kdex-host-manager/docs/superpowers/specs/2026-07-16-requirement-binding-sources-design.md`.
 
 knowdb already encodes the distinction correctly in its own metadata
 (`src/mcp/tools.rs:95`):
