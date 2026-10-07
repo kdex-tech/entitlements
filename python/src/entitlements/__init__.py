@@ -1,5 +1,7 @@
 from typing import Dict, List, Optional
 import dataclasses
+import enum
+import unicodedata
 
 # Types
 SecurityScheme = str
@@ -35,6 +37,61 @@ class InvalidBoundValueError(BindError):
     four ports identical. A binder that could not resolve a value must fail
     like an unbound placeholder rather than widen the gate or diverge across
     ports."""
+
+
+
+class InvalidEntitlementReason(str, enum.Enum):
+    """A stable, cross-port code naming why `validate_entitlement` rejected a
+    string. The values are a contract (SPEC.md, Validation) — callers may put
+    them in a 400 body — so never change one."""
+    EMPTY = "empty"
+    INVALID_CHARACTER = "invalid_character"
+    TOO_MANY_SEGMENTS = "too_many_segments"
+    EMPTY_RESOURCE = "empty_resource"
+    EMPTY_VERB = "empty_verb"
+    PLACEHOLDER = "placeholder"
+
+
+class InvalidEntitlementError(ValueError):
+    """Raised by `validate_entitlement`. Carries the offending string
+    (`entitlement`) and why (`reason`)."""
+
+    def __init__(self, entitlement: str, reason: InvalidEntitlementReason):
+        self.entitlement = entitlement
+        self.reason = reason
+        super().__init__(
+            f"invalid entitlement {entitlement!r}: "
+            f"{_INVALID_ENTITLEMENT_DETAIL[reason]} ({reason.value})"
+        )
+
+
+_INVALID_ENTITLEMENT_DETAIL = {
+    InvalidEntitlementReason.EMPTY: "must not be empty",
+    InvalidEntitlementReason.INVALID_CHARACTER:
+        "must not contain whitespace or control characters",
+    InvalidEntitlementReason.TOO_MANY_SEGMENTS:
+        "more than 3 ':'-separated segments; URL-encode any ':' inside a resourceName",
+    InvalidEntitlementReason.EMPTY_RESOURCE: "resource must not be empty",
+    InvalidEntitlementReason.EMPTY_VERB: "verb must not be empty",
+    InvalidEntitlementReason.PLACEHOLDER:
+        "a {placeholder} resourceName is literal text in a held entitlement; "
+        "grant the concrete resourceName or a wildcard",
+}
+
+# The Unicode White_Space property. Python exposes no property lookup (and
+# str.isspace uses a different definition), so it is spelled out to keep this
+# port identical to the others. The set has been stable since Unicode 6.3.
+_WHITE_SPACE = frozenset(
+    [chr(c) for c in range(0x09, 0x0E)]
+    + [chr(c) for c in (0x20, 0x85, 0xA0, 0x1680)]
+    + [chr(c) for c in range(0x2000, 0x200B)]
+    + [chr(c) for c in (0x2028, 0x2029, 0x202F, 0x205F, 0x3000)]
+)
+
+
+def _is_invalid_char(c: str) -> bool:
+    # Cc: control; Cs: an unpaired surrogate (not well-formed Unicode).
+    return c in _WHITE_SPACE or unicodedata.category(c) in ("Cc", "Cs")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -167,6 +224,45 @@ def compact(entitlements: List[str]) -> List[str]:
         survivors.append(entitlements[i])
         survivor_patterns.append(ep)
     return survivors
+
+
+def validate_entitlement(s: str) -> None:
+    """Raises InvalidEntitlementError unless `s` is a well-formed HELD
+    entitlement: an opaque scope (no ':'), <resource>:<verb>, or
+    <resource>:<resourceName>:<verb>. Reports the first failed check, in this
+    order: empty; a control (Cc) or White_Space character, or an unpaired
+    surrogate; more than 3 segments; an empty resource; an empty verb; a
+    {placeholder} resourceName. An empty resourceName stays legal
+    ("apitokens::mint"), as do wildcards and the verb "all".
+
+    `Pattern.parse` is deliberately lenient: a malformed string becomes an
+    opaque scope or a pattern that never matches. This is the strict
+    counterpart for a writer that accepts entitlements from a person or from
+    configuration and must reject them before they are stored.
+
+    A held {placeholder} is rejected because it is literal text on the held
+    side: it grants nothing a caller can address, and against a caller that
+    skipped bind_requirements it would literally match the unbound requirement.
+    """
+    def invalid(reason: InvalidEntitlementReason) -> InvalidEntitlementError:
+        return InvalidEntitlementError(s, reason)
+
+    if s == "":
+        raise invalid(InvalidEntitlementReason.EMPTY)
+    if any(_is_invalid_char(c) for c in s):
+        raise invalid(InvalidEntitlementReason.INVALID_CHARACTER)
+
+    if ":" not in s:
+        return
+    parts = s.split(":")
+    if len(parts) > 3:
+        raise invalid(InvalidEntitlementReason.TOO_MANY_SEGMENTS)
+    if parts[0] == "":
+        raise invalid(InvalidEntitlementReason.EMPTY_RESOURCE)
+    if parts[-1] == "":
+        raise invalid(InvalidEntitlementReason.EMPTY_VERB)
+    if len(parts) == 3 and Pattern.parse(s).placeholder is not None:
+        raise invalid(InvalidEntitlementReason.PLACEHOLDER)
 
 
 class EntitlementsChecker:

@@ -55,6 +55,76 @@ impl std::fmt::Display for BindError {
 
 impl std::error::Error for BindError {}
 
+/// A stable, cross-port code naming why `Pattern::validate_entitlement`
+/// rejected a string. The codes (`as_str`) are a contract (SPEC.md,
+/// Validation) — callers may put them in a 400 body — so never change one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidEntitlementReason {
+    /// The string is empty.
+    Empty,
+    /// The string contains a control character (Unicode Cc) or a White_Space
+    /// character.
+    InvalidCharacter,
+    /// More than 3 ':'-separated segments.
+    TooManySegments,
+    /// A structured form with an empty resource.
+    EmptyResource,
+    /// A structured form with an empty verb.
+    EmptyVerb,
+    /// The resourceName is a {placeholder}.
+    Placeholder,
+}
+
+impl InvalidEntitlementReason {
+    /// The stable reason code.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::InvalidCharacter => "invalid_character",
+            Self::TooManySegments => "too_many_segments",
+            Self::EmptyResource => "empty_resource",
+            Self::EmptyVerb => "empty_verb",
+            Self::Placeholder => "placeholder",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Empty => "must not be empty",
+            Self::InvalidCharacter => "must not contain whitespace or control characters",
+            Self::TooManySegments => {
+                "more than 3 ':'-separated segments; URL-encode any ':' inside a resourceName"
+            }
+            Self::EmptyResource => "resource must not be empty",
+            Self::EmptyVerb => "verb must not be empty",
+            Self::Placeholder => {
+                "a {placeholder} resourceName is literal text in a held entitlement; grant the concrete resourceName or a wildcard"
+            }
+        }
+    }
+}
+
+/// Returned by `Pattern::validate_entitlement`: the offending string and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidEntitlementError {
+    pub entitlement: String,
+    pub reason: InvalidEntitlementReason,
+}
+
+impl std::fmt::Display for InvalidEntitlementError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "invalid entitlement {:?}: {} ({})",
+            self.entitlement,
+            self.reason.detail(),
+            self.reason.as_str()
+        )
+    }
+}
+
+impl std::error::Error for InvalidEntitlementError {}
+
 /// A parsed representation of an entitlement or requirement pattern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pattern {
@@ -69,6 +139,56 @@ pub enum Pattern {
 }
 
 impl Pattern {
+    /// Reports whether `s` is a well-formed HELD entitlement: an opaque scope
+    /// (no ':'), <resource>:<verb>, or <resource>:<resourceName>:<verb>.
+    /// Returns the first failed check, in this order: empty; a control (Cc) or
+    /// White_Space character; more than 3 segments; an empty resource; an
+    /// empty verb; a {placeholder} resourceName. An empty resourceName stays
+    /// legal ("apitokens::mint"), as do wildcards and the verb "all".
+    ///
+    /// `parse` is deliberately lenient: a malformed string becomes an opaque
+    /// scope or a pattern that never matches. This is the strict counterpart
+    /// for a writer that accepts entitlements from a person or from
+    /// configuration and must reject them before they are stored.
+    ///
+    /// A held {placeholder} is rejected because it is literal text on the held
+    /// side: it grants nothing a caller can address, and against a caller that
+    /// skipped `bind_requirements` it would literally match the unbound
+    /// requirement.
+    pub fn validate_entitlement(s: &str) -> Result<(), InvalidEntitlementError> {
+        let invalid = |reason| {
+            Err(InvalidEntitlementError {
+                entitlement: s.to_string(),
+                reason,
+            })
+        };
+
+        if s.is_empty() {
+            return invalid(InvalidEntitlementReason::Empty);
+        }
+        if s.chars().any(|c| c.is_control() || c.is_whitespace()) {
+            return invalid(InvalidEntitlementReason::InvalidCharacter);
+        }
+
+        if !s.contains(':') {
+            return Ok(());
+        }
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() > 3 {
+            return invalid(InvalidEntitlementReason::TooManySegments);
+        }
+        if parts[0].is_empty() {
+            return invalid(InvalidEntitlementReason::EmptyResource);
+        }
+        if parts[parts.len() - 1].is_empty() {
+            return invalid(InvalidEntitlementReason::EmptyVerb);
+        }
+        if parts.len() == 3 && Pattern::parse(s).placeholder().is_some() {
+            return invalid(InvalidEntitlementReason::Placeholder);
+        }
+        Ok(())
+    }
+
     /// Parses a pattern string into a Pattern enum.
     pub fn parse(s: &str) -> Self {
         let parts: Vec<&str> = s.split(':').collect();
@@ -1102,5 +1222,82 @@ mod tests {
             vec!["vector_stores:*:write".to_string(), "apitokens:mint".to_string()]
         );
         assert!(ec.wildcard_requirements(&reqs("bearer", &["users:me:read"])).is_empty());
+    }
+
+    #[test]
+    fn validate_entitlement_well_formed() {
+        for s in [
+            "email",
+            "admin",
+            "pages:read",
+            "pages::read",
+            "apitokens::mint",
+            "pages:*:read",
+            "pages:/foo:all",
+            "users:{}:read",
+            "pages:a%3Ab:read",
+            "pages:é:read",
+        ] {
+            assert_eq!(Pattern::validate_entitlement(s), Ok(()), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn validate_entitlement_malformed() {
+        use InvalidEntitlementReason::*;
+        for (s, want) in [
+            ("", Empty),
+            (" pages:read", InvalidCharacter),
+            ("pages:read\n", InvalidCharacter),
+            ("pages: read", InvalidCharacter),
+            ("a\tb", InvalidCharacter),
+            ("a\u{0}b", InvalidCharacter),
+            ("a\u{7f}b", InvalidCharacter),
+            ("a\u{85}b", InvalidCharacter),
+            ("pages:\u{a0}:read", InvalidCharacter),
+            ("pages:a\u{3000}b:read", InvalidCharacter),
+            ("pages:a\u{2028}b:read", InvalidCharacter),
+            ("a:b:c:d", TooManySegments),
+            ("pages:a:b:read", TooManySegments),
+            (":::", TooManySegments),
+            (":read", EmptyResource),
+            (":x:read", EmptyResource),
+            (":", EmptyResource),
+            ("::", EmptyResource),
+            ("users:", EmptyVerb),
+            ("users::", EmptyVerb),
+            ("users:*:", EmptyVerb),
+            ("users:{id}:read", Placeholder),
+            // Order: the first failing check is the one reported.
+            ("a b:c:d:e", InvalidCharacter),
+            (":x:y:z", TooManySegments),
+            (":{id}:", EmptyResource),
+            ("users:{id}:", EmptyVerb),
+        ] {
+            assert_eq!(
+                Pattern::validate_entitlement(s),
+                Err(InvalidEntitlementError { entitlement: s.to_string(), reason: want }),
+                "{s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_entitlement_reason_codes_are_stable() {
+        use InvalidEntitlementReason::*;
+        assert_eq!(Empty.as_str(), "empty");
+        assert_eq!(InvalidCharacter.as_str(), "invalid_character");
+        assert_eq!(TooManySegments.as_str(), "too_many_segments");
+        assert_eq!(EmptyResource.as_str(), "empty_resource");
+        assert_eq!(EmptyVerb.as_str(), "empty_verb");
+        assert_eq!(Placeholder.as_str(), "placeholder");
+    }
+
+    #[test]
+    fn validate_entitlement_too_many_segments_points_at_encoding() {
+        let err = Pattern::validate_entitlement("pages:a:b:read").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("URL-encode"), "{msg}");
+        assert!(msg.contains("\"pages:a:b:read\""), "{msg}");
     }
 }

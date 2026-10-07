@@ -208,6 +208,51 @@ dominance.
 All language ports MUST produce identical results: Go `Compact`, Rust
 `Pattern::compact`, Python `compact`, TypeScript `compact`.
 
+### Validation
+
+Verification parses leniently on purpose: a string with too many `:`-separated
+segments becomes an opaque scope, and an empty resource or verb yields a pattern
+that can never match. That is the right behavior on the hot path, but it means a
+malformed grant is stored without complaint and then silently grants nothing (or
+something unintended). `validateEntitlement(s)` is the strict, checker-independent
+check a **writer** runs before storing a **held** entitlement — for example an
+admin-authored role, a mint request, or configured extra grants.
+
+A held entitlement is well-formed if and only if it is one of:
+- an **opaque** scope: no `:`;
+- `<resource>:<verb>`;
+- `<resource>:<resourceName>:<verb>` (an empty `resourceName` is legal:
+  `apitokens::mint` is the medium form).
+
+The checks run in this order, and the first failure is reported. Each failure has
+a stable **reason code**, identical in every port, so a caller can return it in a
+400 body:
+
+| order | reason code | rejected when |
+|---|---|---|
+| 1 | `empty` | `s` is the empty string |
+| 2 | `invalid_character` | `s` contains a character with Unicode general category `Cc` (control), a character with the Unicode `White_Space` property, or is not well-formed Unicode (invalid UTF-8, or an unpaired surrogate) |
+| 3 | `too_many_segments` | `s` has more than 3 `:`-separated segments. A `:` inside a `resourceName` must be URL-encoded (see *Encoding*) |
+| 4 | `empty_resource` | a structured form has an empty `resource` (`:read`, `:x:read`) |
+| 5 | `empty_verb` | a structured form has an empty `verb` (`users:`, `users:*:`) |
+| 6 | `placeholder` | the `resourceName` is a `{placeholder}` (as defined in *Requirement Forms*; `{}` is a literal and stays legal) |
+
+A held `{placeholder}` is rejected because placeholders are a requirement-side
+concept: on the held side it is literal text (see *Requirement Forms*), so a stored
+`users:{id}:read` grants nothing a caller could address — and against a caller that
+skipped binding, it would literally match an unbound requirement `users:{id}:read`.
+Either way it is a mistake, not a grant.
+
+Validation does not judge meaning: a wildcard `resourceName` (`*` or empty) and
+the verb `all` are legal, because they are meaningful held-side grants.
+
+Go `ValidateEntitlement` (returns `*InvalidEntitlementError`, which also matches
+`errors.Is(err, ErrInvalidEntitlement)`), Rust `Pattern::validate_entitlement`
+(returns `Result<(), InvalidEntitlementError>`), Python `validate_entitlement`
+(raises `InvalidEntitlementError`, a `ValueError`), TypeScript
+`validateEntitlement` (throws `InvalidEntitlementError`). Each error carries the
+offending entitlement string and its reason code.
+
 ### Anonymous Entitlements
 An `EntitlementsChecker` can be configured with a list of "anonymous" patterns. These patterns are automatically granted to callers **only when the caller's `Entitlements` map is empty** (no schemes present, or every scheme's list is empty). They are applied under the `defaultScheme`. An authenticated caller — one who passes any entitlements at all — does **not** receive the anonymous bag.
 

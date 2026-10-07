@@ -6,6 +6,9 @@ import {
   UnboundPlaceholderError,
   WildcardRequirementError,
   InvalidBoundValueError,
+  InvalidEntitlementError,
+  validateEntitlement,
+  type InvalidEntitlementReason,
   type Entitlements,
   type Requirements,
 } from "./index.js";
@@ -1111,5 +1114,70 @@ describe("wildcardRequirements", () => {
     ).toEqual(["vector_stores:*:write", "apitokens:mint"]);
 
     expect(ec.wildcardRequirements([{ bearer: ["users:me:read"] }])).toEqual([]);
+  });
+});
+
+describe("validateEntitlement", () => {
+  it.each([
+    "email",
+    "admin",
+    "pages:read",
+    "pages::read",
+    "apitokens::mint",
+    "pages:*:read",
+    "pages:/foo:all",
+    "users:{}:read",
+    "pages:a%3Ab:read",
+    "pages:é:read",
+  ])("accepts %j", (s) => {
+    expect(() => validateEntitlement(s)).not.toThrow();
+  });
+
+  const malformed: Array<[string, InvalidEntitlementReason]> = [
+    ["", "empty"],
+    [" pages:read", "invalid_character"],
+    ["pages:read\n", "invalid_character"],
+    ["pages: read", "invalid_character"],
+    ["a\tb", "invalid_character"],
+    ["a\u0000b", "invalid_character"],
+    ["a\u007fb", "invalid_character"],
+    ["a\u0085b", "invalid_character"],
+    ["pages:\u00a0:read", "invalid_character"],
+    ["pages:a\u3000b:read", "invalid_character"],
+    ["pages:a\u2028b:read", "invalid_character"],
+    ["a\ud800b", "invalid_character"], // unpaired surrogate
+    ["a:b:c:d", "too_many_segments"],
+    ["pages:a:b:read", "too_many_segments"],
+    [":::", "too_many_segments"],
+    [":read", "empty_resource"],
+    [":x:read", "empty_resource"],
+    [":", "empty_resource"],
+    ["::", "empty_resource"],
+    ["users:", "empty_verb"],
+    ["users::", "empty_verb"],
+    ["users:*:", "empty_verb"],
+    ["users:{id}:read", "placeholder"],
+    // Order: the first failing check is the one reported.
+    ["a b:c:d:e", "invalid_character"],
+    [":x:y:z", "too_many_segments"],
+    [":{id}:", "empty_resource"],
+    ["users:{id}:", "empty_verb"],
+  ];
+  it.each(malformed)("rejects %j as %s", (s, want) => {
+    let caught: unknown;
+    try {
+      validateEntitlement(s);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(InvalidEntitlementError);
+    const err = caught as InvalidEntitlementError;
+    expect(err.reason).toBe(want);
+    expect(err.entitlement).toBe(s);
+  });
+
+  it("points a too-many-segments failure at URL-encoding", () => {
+    expect(() => validateEntitlement("pages:a:b:read")).toThrow(/URL-encode/);
+    expect(() => validateEntitlement("pages:a:b:read")).toThrow('"pages:a:b:read"');
   });
 });

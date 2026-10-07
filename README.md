@@ -21,3 +21,17 @@ spellings that still need migrating before enabling it.
 Binding a placeholder to `""` or `*` is an error — those are the wildcard
 spelling, not a concrete resource name, so binding one would widen the
 requirement to the whole class.
+
+### Validating held entitlements
+
+Verification parses leniently, so a malformed grant (`a:b:c:d`, `:x:read`,
+`users:*:`) is stored without complaint and then silently grants nothing.
+Anything that accepts entitlements from a person or from configuration should
+call `validateEntitlement(s)` (Go `ValidateEntitlement`, Rust
+`Pattern::validate_entitlement`, Python `validate_entitlement`) before storing
+them. It rejects an empty string, whitespace or control characters, more than 3
+`:`-separated segments (URL-encode a `:` inside a resourceName), an empty
+resource or verb, and a held `{placeholder}` resourceName. Each rejection
+carries a stable reason code (`empty`, `invalid_character`, `too_many_segments`,
+`empty_resource`, `empty_verb`, `placeholder`) that is identical in every port,
+so it can go straight into a 400 body. See `SPEC.md` → *Validation*.

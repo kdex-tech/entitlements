@@ -6,6 +6,8 @@ import (
 	"maps"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-logr/logr"
 )
@@ -619,6 +621,118 @@ var ErrWildcardRequirement = errors.New("entitlements: wildcard resourceName is 
 // resolve a value must fail like an unbound placeholder rather than widen the
 // gate or diverge across ports.
 var ErrInvalidBoundValue = errors.New("entitlements: bound value must not be empty, a wildcard, or contain ':'")
+
+// ErrInvalidEntitlement is matched (via errors.Is) by every error
+// ValidateEntitlement returns. Use errors.As with *InvalidEntitlementError to
+// read the reason.
+var ErrInvalidEntitlement = errors.New("entitlements: invalid entitlement")
+
+// InvalidEntitlementReason is a stable, cross-port code naming why
+// ValidateEntitlement rejected a string. The values are a contract (SPEC.md,
+// Validation) — callers may put them in a 400 body — so never change one.
+type InvalidEntitlementReason string
+
+const (
+	// InvalidEntitlementEmpty: the string is empty.
+	InvalidEntitlementEmpty InvalidEntitlementReason = "empty"
+	// InvalidEntitlementCharacter: the string contains a control character
+	// (Unicode Cc) or a White_Space character, or is not valid UTF-8.
+	InvalidEntitlementCharacter InvalidEntitlementReason = "invalid_character"
+	// InvalidEntitlementTooManySegments: more than 3 ':'-separated segments.
+	InvalidEntitlementTooManySegments InvalidEntitlementReason = "too_many_segments"
+	// InvalidEntitlementEmptyResource: a structured form with an empty resource.
+	InvalidEntitlementEmptyResource InvalidEntitlementReason = "empty_resource"
+	// InvalidEntitlementEmptyVerb: a structured form with an empty verb.
+	InvalidEntitlementEmptyVerb InvalidEntitlementReason = "empty_verb"
+	// InvalidEntitlementPlaceholder: the resourceName is a {placeholder}.
+	InvalidEntitlementPlaceholder InvalidEntitlementReason = "placeholder"
+)
+
+// InvalidEntitlementError is returned by ValidateEntitlement. It carries the
+// offending string and the reason code, and matches ErrInvalidEntitlement.
+type InvalidEntitlementError struct {
+	Entitlement string
+	Reason      InvalidEntitlementReason
+}
+
+func (e *InvalidEntitlementError) Error() string {
+	return fmt.Sprintf("%s %q: %s (%s)", ErrInvalidEntitlement, e.Entitlement, e.Reason.detail(), e.Reason)
+}
+
+func (e *InvalidEntitlementError) Unwrap() error {
+	return ErrInvalidEntitlement
+}
+
+func (r InvalidEntitlementReason) detail() string {
+	switch r {
+	case InvalidEntitlementEmpty:
+		return "must not be empty"
+	case InvalidEntitlementCharacter:
+		return "must not contain whitespace or control characters"
+	case InvalidEntitlementTooManySegments:
+		return "more than 3 ':'-separated segments; URL-encode any ':' inside a resourceName"
+	case InvalidEntitlementEmptyResource:
+		return "resource must not be empty"
+	case InvalidEntitlementEmptyVerb:
+		return "verb must not be empty"
+	case InvalidEntitlementPlaceholder:
+		return "a {placeholder} resourceName is literal text in a held entitlement; grant the concrete resourceName or a wildcard"
+	}
+	return string(r)
+}
+
+// ValidateEntitlement reports whether s is a well-formed HELD entitlement: an
+// opaque scope (no ':'), <resource>:<verb>, or <resource>:<resourceName>:<verb>.
+// It returns nil, or an *InvalidEntitlementError naming the first failed check
+// in this order: empty; a control (Cc) or White_Space character, or invalid
+// UTF-8; more than 3 segments; an empty resource; an empty verb; a
+// {placeholder} resourceName. An empty resourceName stays legal
+// ("apitokens::mint"), as do wildcards and the verb "all".
+//
+// Verification deliberately parses leniently (see parsePattern): a malformed
+// string becomes an opaque scope or a pattern that never matches. This is the
+// strict counterpart for a writer that accepts entitlements from a person or
+// from configuration and must reject them before they are stored. It is pure
+// and checker-independent.
+//
+// A held {placeholder} is rejected because it is literal text on the held side:
+// it grants nothing a caller can address, and against a caller that skipped
+// BindRequirements it would literally match the unbound requirement.
+func ValidateEntitlement(s string) error {
+	invalid := func(r InvalidEntitlementReason) error {
+		return &InvalidEntitlementError{Entitlement: s, Reason: r}
+	}
+
+	if s == "" {
+		return invalid(InvalidEntitlementEmpty)
+	}
+	if !utf8.ValidString(s) {
+		return invalid(InvalidEntitlementCharacter)
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.White_Space, r) {
+			return invalid(InvalidEntitlementCharacter)
+		}
+	}
+
+	if !strings.Contains(s, ":") {
+		return nil
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) > 3 {
+		return invalid(InvalidEntitlementTooManySegments)
+	}
+	if parts[0] == "" {
+		return invalid(InvalidEntitlementEmptyResource)
+	}
+	if parts[len(parts)-1] == "" {
+		return invalid(InvalidEntitlementEmptyVerb)
+	}
+	if len(parts) == 3 && placeholderKey(parts[1]) != "" {
+		return invalid(InvalidEntitlementPlaceholder)
+	}
+	return nil
+}
 
 // placeholderKey returns the binding key when resourceName has the form
 // "{key}", else "". "{}" is a literal resourceName, not a placeholder.

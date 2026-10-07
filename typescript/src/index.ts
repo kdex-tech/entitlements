@@ -78,6 +78,49 @@ export class InvalidBoundValueError extends Error {
 }
 
 /**
+ * A stable, cross-port code naming why `validateEntitlement` rejected a
+ * string. The values are a contract (SPEC.md, Validation) — callers may put
+ * them in a 400 body — so never change one.
+ */
+export type InvalidEntitlementReason =
+  | "empty"
+  | "invalid_character"
+  | "too_many_segments"
+  | "empty_resource"
+  | "empty_verb"
+  | "placeholder";
+
+/** Thrown by `validateEntitlement`: the offending string and why. */
+export class InvalidEntitlementError extends Error {
+  constructor(
+    readonly entitlement: string,
+    readonly reason: InvalidEntitlementReason,
+  ) {
+    super(
+      `invalid entitlement ${JSON.stringify(entitlement)}: ` +
+        `${INVALID_ENTITLEMENT_DETAIL[reason]} (${reason})`,
+    );
+    this.name = "InvalidEntitlementError";
+  }
+}
+
+const INVALID_ENTITLEMENT_DETAIL: Record<InvalidEntitlementReason, string> = {
+  empty: "must not be empty",
+  invalid_character: "must not contain whitespace or control characters",
+  too_many_segments:
+    "more than 3 ':'-separated segments; URL-encode any ':' inside a resourceName",
+  empty_resource: "resource must not be empty",
+  empty_verb: "verb must not be empty",
+  placeholder:
+    "a {placeholder} resourceName is literal text in a held entitlement; " +
+    "grant the concrete resourceName or a wildcard",
+};
+
+/** Cc (control), Cs (an unpaired surrogate: not well-formed Unicode), or the
+ * Unicode White_Space property. */
+const INVALID_ENTITLEMENT_CHAR = /[\p{Cc}\p{Cs}\p{White_Space}]/u;
+
+/**
  * The binding key when resourceName has the form "{key}", else "". "{}" is a
  * literal resourceName, not a placeholder.
  */
@@ -276,6 +319,38 @@ export function compact(entitlements: string[]): string[] {
     }
   }
   return survivors;
+}
+
+/**
+ * Throws InvalidEntitlementError unless `s` is a well-formed HELD entitlement:
+ * an opaque scope (no ':'), <resource>:<verb>, or
+ * <resource>:<resourceName>:<verb>. Reports the first failed check, in this
+ * order: empty; a control (Cc) or White_Space character, or an unpaired
+ * surrogate; more than 3 segments; an empty resource; an empty verb; a
+ * {placeholder} resourceName. An empty resourceName stays legal
+ * ("apitokens::mint"), as do wildcards and the verb "all".
+ *
+ * Verification parses leniently on purpose: a malformed string becomes an
+ * opaque scope or a pattern that never matches. This is the strict
+ * counterpart for a writer that accepts entitlements from a person or from
+ * configuration and must reject them before they are stored.
+ *
+ * A held {placeholder} is rejected because it is literal text on the held
+ * side: it grants nothing a caller can address, and against a caller that
+ * skipped bindRequirements it would literally match the unbound requirement.
+ */
+export function validateEntitlement(s: string): void {
+  const invalid = (reason: InvalidEntitlementReason) => new InvalidEntitlementError(s, reason);
+
+  if (s === "") throw invalid("empty");
+  if (INVALID_ENTITLEMENT_CHAR.test(s)) throw invalid("invalid_character");
+
+  if (!s.includes(":")) return;
+  const parts = s.split(":");
+  if (parts.length > 3) throw invalid("too_many_segments");
+  if (parts[0] === "") throw invalid("empty_resource");
+  if (parts[parts.length - 1] === "") throw invalid("empty_verb");
+  if (parts.length === 3 && placeholderKey(parts[1]!) !== "") throw invalid("placeholder");
 }
 
 function isAnonymousCallerPatterns(

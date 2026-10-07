@@ -2,10 +2,13 @@ import pytest
 from entitlements import (
     EntitlementsChecker,
     InvalidBoundValueError,
+    InvalidEntitlementError,
+    InvalidEntitlementReason,
     Pattern,
     UnboundPlaceholderError,
     WildcardRequirementError,
     compact,
+    validate_entitlement,
     verify_attenuation,
 )
 
@@ -446,3 +449,77 @@ def test_wildcard_requirements_inventory():
     ]
     assert ec.wildcard_requirements(reqs) == ["vector_stores:*:write", "apitokens:mint"]
     assert ec.wildcard_requirements([{"bearer": ["users:me:read"]}]) == []
+
+
+@pytest.mark.parametrize("s", [
+    "email",
+    "admin",
+    "pages:read",
+    "pages::read",
+    "apitokens::mint",
+    "pages:*:read",
+    "pages:/foo:all",
+    "users:{}:read",
+    "pages:a%3Ab:read",
+    "pages:é:read",
+])
+def test_validate_entitlement_well_formed(s):
+    validate_entitlement(s)
+
+
+@pytest.mark.parametrize("s,want", [
+    ("", "empty"),
+    (" pages:read", "invalid_character"),
+    ("pages:read\n", "invalid_character"),
+    ("pages: read", "invalid_character"),
+    ("a\tb", "invalid_character"),
+    ("a\x00b", "invalid_character"),
+    ("a\x7fb", "invalid_character"),
+    ("a\x85b", "invalid_character"),
+    ("pages:\u00a0:read", "invalid_character"),
+    ("pages:a\u3000b:read", "invalid_character"),
+    ("pages:a\u2028b:read", "invalid_character"),
+    ("a\ud800b", "invalid_character"),  # unpaired surrogate
+    ("a:b:c:d", "too_many_segments"),
+    ("pages:a:b:read", "too_many_segments"),
+    (":::", "too_many_segments"),
+    (":read", "empty_resource"),
+    (":x:read", "empty_resource"),
+    (":", "empty_resource"),
+    ("::", "empty_resource"),
+    ("users:", "empty_verb"),
+    ("users::", "empty_verb"),
+    ("users:*:", "empty_verb"),
+    ("users:{id}:read", "placeholder"),
+    # Order: the first failing check is the one reported.
+    ("a b:c:d:e", "invalid_character"),
+    (":x:y:z", "too_many_segments"),
+    (":{id}:", "empty_resource"),
+    ("users:{id}:", "empty_verb"),
+])
+def test_validate_entitlement_malformed(s, want):
+    with pytest.raises(InvalidEntitlementError) as ei:
+        validate_entitlement(s)
+    assert ei.value.reason == want
+    assert ei.value.reason is InvalidEntitlementReason(want)
+    assert ei.value.entitlement == s
+    assert isinstance(ei.value, ValueError)
+
+
+def test_validate_entitlement_reason_codes_are_stable():
+    # The codes are a cross-port contract (SPEC.md, Validation).
+    assert [r.value for r in InvalidEntitlementReason] == [
+        "empty",
+        "invalid_character",
+        "too_many_segments",
+        "empty_resource",
+        "empty_verb",
+        "placeholder",
+    ]
+
+
+def test_validate_entitlement_too_many_segments_points_at_encoding():
+    with pytest.raises(InvalidEntitlementError) as ei:
+        validate_entitlement("pages:a:b:read")
+    assert "URL-encode" in str(ei.value)
+    assert "'pages:a:b:read'" in str(ei.value)
