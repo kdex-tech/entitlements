@@ -699,6 +699,19 @@ func (r InvalidEntitlementReason) detail() string {
 // it grants nothing a caller can address, and against a caller that skipped
 // BindRequirements it would literally match the unbound requirement.
 func ValidateEntitlement(s string) error {
+	return validate(s, false)
+}
+
+// ValidateRequirement is ValidateEntitlement for a REQUIREMENT string: the same
+// checks, in the same order, with the same reason codes, except that a
+// {placeholder} resourceName is legal -- on the requirement side it is the hole
+// BindRequirements fills. Use it to check a requirement declared in
+// configuration (an OpenAPI security block or extension) before relying on it.
+func ValidateRequirement(s string) error {
+	return validate(s, true)
+}
+
+func validate(s string, allowPlaceholder bool) error {
 	invalid := func(r InvalidEntitlementReason) error {
 		return &InvalidEntitlementError{Entitlement: s, Reason: r}
 	}
@@ -728,7 +741,7 @@ func ValidateEntitlement(s string) error {
 	if parts[len(parts)-1] == "" {
 		return invalid(InvalidEntitlementEmptyVerb)
 	}
-	if len(parts) == 3 && placeholderKey(parts[1]) != "" {
+	if !allowPlaceholder && len(parts) == 3 && placeholderKey(parts[1]) != "" {
 		return invalid(InvalidEntitlementPlaceholder)
 	}
 	return nil

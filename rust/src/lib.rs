@@ -156,6 +156,19 @@ impl Pattern {
     /// skipped `bind_requirements` it would literally match the unbound
     /// requirement.
     pub fn validate_entitlement(s: &str) -> Result<(), InvalidEntitlementError> {
+        Self::validate(s, false)
+    }
+
+    /// `validate_entitlement` for a REQUIREMENT string: the same checks, in
+    /// the same order, with the same reason codes, except that a
+    /// {placeholder} resourceName is legal -- on the requirement side it is
+    /// the hole `bind_requirements` fills. Use it to check a requirement
+    /// declared in configuration before relying on it.
+    pub fn validate_requirement(s: &str) -> Result<(), InvalidEntitlementError> {
+        Self::validate(s, true)
+    }
+
+    fn validate(s: &str, allow_placeholder: bool) -> Result<(), InvalidEntitlementError> {
         let invalid = |reason| {
             Err(InvalidEntitlementError {
                 entitlement: s.to_string(),
@@ -183,7 +196,7 @@ impl Pattern {
         if parts[parts.len() - 1].is_empty() {
             return invalid(InvalidEntitlementReason::EmptyVerb);
         }
-        if parts.len() == 3 && Pattern::parse(s).placeholder().is_some() {
+        if !allow_placeholder && parts.len() == 3 && Pattern::parse(s).placeholder().is_some() {
             return invalid(InvalidEntitlementReason::Placeholder);
         }
         Ok(())
@@ -1299,5 +1312,26 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("URL-encode"), "{msg}");
         assert!(msg.contains("\"pages:a:b:read\""), "{msg}");
+    }
+
+    #[test]
+    fn validate_requirement_allows_placeholders() {
+        use InvalidEntitlementReason::*;
+        for s in ["users:{id}:read", "roles:{key}:assign", "pages:read", "apitokens::mint", "users:{}:read", "vector_stores_create"] {
+            assert_eq!(Pattern::validate_requirement(s), Ok(()), "{s:?}");
+        }
+        for (s, want) in [
+            ("", Empty),
+            ("users:{id }:read", InvalidCharacter),
+            ("a:{b}:c:d", TooManySegments),
+            (":{id}:read", EmptyResource),
+            ("users:{id}:", EmptyVerb),
+        ] {
+            assert_eq!(
+                Pattern::validate_requirement(s),
+                Err(InvalidEntitlementError { entitlement: s.to_string(), reason: want }),
+                "{s:?}"
+            );
+        }
     }
 }

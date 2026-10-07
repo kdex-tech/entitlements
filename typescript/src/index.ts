@@ -340,6 +340,20 @@ export function compact(entitlements: string[]): string[] {
  * skipped bindRequirements it would literally match the unbound requirement.
  */
 export function validateEntitlement(s: string): void {
+  validate(s, false);
+}
+
+/**
+ * validateEntitlement for a REQUIREMENT string: the same checks, in the same
+ * order, with the same reason codes, except that a {placeholder} resourceName
+ * is legal -- on the requirement side it is the hole bindRequirements fills.
+ * Use it to check a requirement declared in configuration before relying on it.
+ */
+export function validateRequirement(s: string): void {
+  validate(s, true);
+}
+
+function validate(s: string, allowPlaceholder: boolean): void {
   const invalid = (reason: InvalidEntitlementReason) => new InvalidEntitlementError(s, reason);
 
   if (s === "") throw invalid("empty");
@@ -350,7 +364,9 @@ export function validateEntitlement(s: string): void {
   if (parts.length > 3) throw invalid("too_many_segments");
   if (parts[0] === "") throw invalid("empty_resource");
   if (parts[parts.length - 1] === "") throw invalid("empty_verb");
-  if (parts.length === 3 && placeholderKey(parts[1]!) !== "") throw invalid("placeholder");
+  if (!allowPlaceholder && parts.length === 3 && placeholderKey(parts[1]!) !== "") {
+    throw invalid("placeholder");
+  }
 }
 
 function isAnonymousCallerPatterns(

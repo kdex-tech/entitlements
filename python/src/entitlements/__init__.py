@@ -244,6 +244,19 @@ def validate_entitlement(s: str) -> None:
     side: it grants nothing a caller can address, and against a caller that
     skipped bind_requirements it would literally match the unbound requirement.
     """
+    _validate(s, allow_placeholder=False)
+
+
+def validate_requirement(s: str) -> None:
+    """validate_entitlement for a REQUIREMENT string: the same checks, in the
+    same order, with the same reason codes, except that a {placeholder}
+    resourceName is legal -- on the requirement side it is the hole
+    bind_requirements fills. Use it to check a requirement declared in
+    configuration before relying on it."""
+    _validate(s, allow_placeholder=True)
+
+
+def _validate(s: str, allow_placeholder: bool) -> None:
     def invalid(reason: InvalidEntitlementReason) -> InvalidEntitlementError:
         return InvalidEntitlementError(s, reason)
 
@@ -261,7 +274,7 @@ def validate_entitlement(s: str) -> None:
         raise invalid(InvalidEntitlementReason.EMPTY_RESOURCE)
     if parts[-1] == "":
         raise invalid(InvalidEntitlementReason.EMPTY_VERB)
-    if len(parts) == 3 and Pattern.parse(s).placeholder is not None:
+    if not allow_placeholder and len(parts) == 3 and Pattern.parse(s).placeholder is not None:
         raise invalid(InvalidEntitlementReason.PLACEHOLDER)
 
 

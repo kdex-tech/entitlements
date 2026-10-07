@@ -8,6 +8,7 @@ import {
   InvalidBoundValueError,
   InvalidEntitlementError,
   validateEntitlement,
+  validateRequirement,
   type InvalidEntitlementReason,
   type Entitlements,
   type Requirements,
@@ -1179,5 +1180,32 @@ describe("validateEntitlement", () => {
   it("points a too-many-segments failure at URL-encoding", () => {
     expect(() => validateEntitlement("pages:a:b:read")).toThrow(/URL-encode/);
     expect(() => validateEntitlement("pages:a:b:read")).toThrow('"pages:a:b:read"');
+  });
+});
+
+describe("validateRequirement", () => {
+  it.each(["users:{id}:read", "roles:{key}:assign", "pages:read", "apitokens::mint", "users:{}:read", "vector_stores_create"])(
+    "accepts %j",
+    (s) => {
+      expect(() => validateRequirement(s)).not.toThrow();
+    },
+  );
+
+  const malformed: Array<[string, InvalidEntitlementReason]> = [
+    ["", "empty"],
+    ["users:{id }:read", "invalid_character"],
+    ["a:{b}:c:d", "too_many_segments"],
+    [":{id}:read", "empty_resource"],
+    ["users:{id}:", "empty_verb"],
+  ];
+  it.each(malformed)("rejects %j as %s", (s, want) => {
+    let caught: unknown;
+    try {
+      validateRequirement(s);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(InvalidEntitlementError);
+    expect((caught as InvalidEntitlementError).reason).toBe(want);
   });
 });

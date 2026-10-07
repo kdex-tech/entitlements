@@ -34,4 +34,6 @@ them. It rejects an empty string, whitespace or control characters, more than 3
 resource or verb, and a held `{placeholder}` resourceName. Each rejection
 carries a stable reason code (`empty`, `invalid_character`, `too_many_segments`,
 `empty_resource`, `empty_verb`, `placeholder`) that is identical in every port,
-so it can go straight into a 400 body. See `SPEC.md` → *Validation*.
+so it can go straight into a 400 body. `validateRequirement(s)` is the same
+check for a requirement string, where a `{placeholder}` resourceName is legal.
+See `SPEC.md` → *Validation*.

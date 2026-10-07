@@ -246,6 +246,15 @@ Either way it is a mistake, not a grant.
 Validation does not judge meaning: a wildcard `resourceName` (`*` or empty) and
 the verb `all` are legal, because they are meaningful held-side grants.
 
+`validateRequirement(s)` is the same check for a **requirement** string, such as
+an entry of an OpenAPI `security` block or of an operation extension that
+declares requirements. It runs the same checks, in the same order, with the same
+reason codes, except that a `{placeholder}` `resourceName` is legal: on the
+requirement side it is the hole `bindRequirements` fills. The `placeholder`
+reason is therefore never reported by `validateRequirement`. Go
+`ValidateRequirement`, Rust `Pattern::validate_requirement`, Python
+`validate_requirement`, TypeScript `validateRequirement`.
+
 Go `ValidateEntitlement` (returns `*InvalidEntitlementError`, which also matches
 `errors.Is(err, ErrInvalidEntitlement)`), Rust `Pattern::validate_entitlement`
 (returns `Result<(), InvalidEntitlementError>`), Python `validate_entitlement`

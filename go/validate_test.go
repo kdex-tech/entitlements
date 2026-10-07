@@ -100,3 +100,36 @@ func TestValidateEntitlement_NotAnErrorOfOtherKinds(t *testing.T) {
 	err := entitlements.ValidateEntitlement("")
 	assert.False(t, errors.Is(err, entitlements.ErrInvalidBoundValue))
 }
+
+// ValidateRequirement is the requirement-side twin: a {placeholder}
+// resourceName is legal there (it is what BindRequirements binds), every other
+// check is the same and reports the same reason code.
+func TestValidateRequirement(t *testing.T) {
+	for _, s := range []string{
+		"users:{id}:read",
+		"roles:{key}:assign",
+		"pages:read",
+		"apitokens::mint",
+		"users:{}:read",
+		"vector_stores_create",
+	} {
+		assert.NoError(t, entitlements.ValidateRequirement(s), "%q", s)
+	}
+
+	for _, tt := range []struct {
+		in   string
+		want entitlements.InvalidEntitlementReason
+	}{
+		{"", entitlements.InvalidEntitlementEmpty},
+		{"users:{id }:read", entitlements.InvalidEntitlementCharacter},
+		{"a:{b}:c:d", entitlements.InvalidEntitlementTooManySegments},
+		{":{id}:read", entitlements.InvalidEntitlementEmptyResource},
+		{"users:{id}:", entitlements.InvalidEntitlementEmptyVerb},
+	} {
+		err := entitlements.ValidateRequirement(tt.in)
+		var ie *entitlements.InvalidEntitlementError
+		require.ErrorAs(t, err, &ie, "%q", tt.in)
+		assert.Equal(t, tt.want, ie.Reason, "%q", tt.in)
+		assert.ErrorIs(t, err, entitlements.ErrInvalidEntitlement)
+	}
+}

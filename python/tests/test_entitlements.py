@@ -9,6 +9,7 @@ from entitlements import (
     WildcardRequirementError,
     compact,
     validate_entitlement,
+    validate_requirement,
     verify_attenuation,
 )
 
@@ -523,3 +524,28 @@ def test_validate_entitlement_too_many_segments_points_at_encoding():
         validate_entitlement("pages:a:b:read")
     assert "URL-encode" in str(ei.value)
     assert "'pages:a:b:read'" in str(ei.value)
+
+
+@pytest.mark.parametrize("s", [
+    "users:{id}:read",
+    "roles:{key}:assign",
+    "pages:read",
+    "apitokens::mint",
+    "users:{}:read",
+    "vector_stores_create",
+])
+def test_validate_requirement_allows_placeholders(s):
+    validate_requirement(s)
+
+
+@pytest.mark.parametrize("s,want", [
+    ("", "empty"),
+    ("users:{id }:read", "invalid_character"),
+    ("a:{b}:c:d", "too_many_segments"),
+    (":{id}:read", "empty_resource"),
+    ("users:{id}:", "empty_verb"),
+])
+def test_validate_requirement_malformed(s, want):
+    with pytest.raises(InvalidEntitlementError) as ei:
+        validate_requirement(s)
+    assert ei.value.reason == want
